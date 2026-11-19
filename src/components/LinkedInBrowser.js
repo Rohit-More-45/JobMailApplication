@@ -18,6 +18,8 @@ import BrowserHeader from './BrowserHeader';
 
 const LINKEDIN_FEED_URL = 'https://www.linkedin.com/feed/';
 
+const DENSITY_LEVELS = [0.55, 0.7, 0.85, 1.0, 1.15, 1.3];
+
 const CUSTOM_USER_AGENT = Platform.select({
   android:
     'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
@@ -86,27 +88,35 @@ export default function LinkedInBrowser() {
     }
   }, []);
 
-  // Zoom In (+)
+  // Vertical Density Zoom In (+) - Larger text/elements
   const handleZoomIn = useCallback(() => {
-    const nextZoom = Math.min(1.8, Math.round((zoomLevel + 0.1) * 10) / 10);
-    setZoomLevel(nextZoom);
-    applyZoom(nextZoom);
-  }, [zoomLevel, applyZoom]);
+    setZoomLevel((prev) => {
+      const idx = DENSITY_LEVELS.findIndex((l) => Math.abs(l - prev) < 0.05);
+      const nextIdx = idx >= 0 ? Math.min(DENSITY_LEVELS.length - 1, idx + 1) : 3;
+      const nextZoom = DENSITY_LEVELS[nextIdx];
+      applyZoom(nextZoom);
+      return nextZoom;
+    });
+  }, [applyZoom]);
 
-  // Zoom Out (-)
+  // Vertical Density Zoom Out (-) - Fits more vertical content on screen with natural wrapping
   const handleZoomOut = useCallback(() => {
-    const nextZoom = Math.max(0.4, Math.round((zoomLevel - 0.1) * 10) / 10);
-    setZoomLevel(nextZoom);
-    applyZoom(nextZoom);
-  }, [zoomLevel, applyZoom]);
+    setZoomLevel((prev) => {
+      const idx = DENSITY_LEVELS.findIndex((l) => Math.abs(l - prev) < 0.05);
+      const nextIdx = idx >= 0 ? Math.max(0, idx - 1) : 2;
+      const nextZoom = DENSITY_LEVELS[nextIdx];
+      applyZoom(nextZoom);
+      return nextZoom;
+    });
+  }, [applyZoom]);
 
-  // Reset Zoom to 100%
+  // Reset to default 100%
   const handleResetZoom = useCallback(() => {
     setZoomLevel(1.0);
     applyZoom(1.0);
   }, [applyZoom]);
 
-  // Capture Screenshot & Send ONLY Screenshot to ChatGPT (No extra text)
+  // Capture Screenshot & Send ONLY ONE Screenshot to ChatGPT (No extra text)
   const handleCaptureAndSend = useCallback(async () => {
     try {
       setIsCapturing(true);
@@ -136,11 +146,12 @@ export default function LinkedInBrowser() {
       setIsCapturing(false);
 
       if (screenshotUri && screenshotBase64) {
+        const shotId = 'shot_' + Date.now();
         // Only screenshot is sent - no extra text
         setCapturedContent({
           screenshotUri: screenshotUri,
           screenshotBase64: screenshotBase64,
-          postId: 'screenshot_' + Date.now(),
+          postId: shotId,
         });
 
         // Navigate immediately to ChatGPT tab
@@ -345,9 +356,9 @@ export default function LinkedInBrowser() {
                   <TouchableOpacity
                     style={styles.zoomBadge}
                     onPress={handleResetZoom}
-                    accessibilityLabel="Reset Zoom to 100%"
+                    accessibilityLabel="Reset to 100%"
                   >
-                    <Ionicons name="search" size={12} color="#94a3b8" />
+                    <Ionicons name="swap-vertical" size={13} color="#94a3b8" />
                     <Text style={styles.zoomBadgeText}>{zoomPercent}%</Text>
                   </TouchableOpacity>
 

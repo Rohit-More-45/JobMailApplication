@@ -29,8 +29,7 @@ const CHATGPT_USER_AGENT = Platform.select({
 export default function ChatGPTBrowser() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
-  const hasAttachedRef = useRef(false);
-  const currentPostIdRef = useRef(null);
+  const attachedPostIdsRef = useRef(new Set());
 
   const { capturedContent, clearCapturedContent, pendingPaste, markPasteDone } = useSelection();
 
@@ -38,14 +37,6 @@ export default function ChatGPTBrowser() {
   const [loading, setLoading] = useState(true);
   const [attachStatus, setAttachStatus] = useState(false);
   const [previewModalVisible, setPreviewModalVisible] = useState(false);
-
-  // Reset attachment flag when a new screenshot is captured
-  useEffect(() => {
-    if (capturedContent && capturedContent.postId !== currentPostIdRef.current) {
-      currentPostIdRef.current = capturedContent.postId;
-      hasAttachedRef.current = false;
-    }
-  }, [capturedContent]);
 
   // Hardware back button on Android
   useEffect(() => {
@@ -71,22 +62,27 @@ export default function ChatGPTBrowser() {
   const triggerAttach = useCallback((force = false) => {
     if (!capturedContent || !capturedContent.screenshotBase64 || !webViewRef.current) return;
 
-    if (!force && hasAttachedRef.current) {
-      return; // Already attached, prevent duplicates
+    const postId = capturedContent.postId || 'post_' + Date.now();
+
+    // Prevent duplicate attachment of the same screenshot
+    if (!force && attachedPostIdsRef.current.has(postId)) {
+      return;
     }
 
-    hasAttachedRef.current = true;
+    // Synchronously record as attached to prevent race conditions
+    attachedPostIdsRef.current.add(postId);
     markPasteDone();
 
     const base64Img = capturedContent.screenshotBase64;
     const escapedBase64 = JSON.stringify(base64Img);
+    const escapedPostId = JSON.stringify(postId);
 
     webViewRef.current.injectJavaScript(`
       if (window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY) {
-        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${force ? 'true' : 'false'});
+        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${escapedPostId}, ${force ? 'true' : 'false'});
       } else {
         ${CHATGPT_INJECTION_SCRIPT}
-        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${force ? 'true' : 'false'});
+        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${escapedPostId}, ${force ? 'true' : 'false'});
       }
       true;
     `);
@@ -97,11 +93,19 @@ export default function ChatGPTBrowser() {
 
   // Automatically trigger screenshot attach once when ready
   useEffect(() => {
-    if (pendingPaste && capturedContent && capturedContent.screenshotBase64 && !loading && !hasAttachedRef.current) {
-      const timer = setTimeout(() => {
-        triggerAttach(false);
-      }, 800);
-      return () => clearTimeout(timer);
+    if (
+      pendingPaste &&
+      capturedContent &&
+      capturedContent.screenshotBase64 &&
+      !loading
+    ) {
+      const postId = capturedContent.postId || 'post_default';
+      if (!attachedPostIdsRef.current.has(postId)) {
+        const timer = setTimeout(() => {
+          triggerAttach(false);
+        }, 800);
+        return () => clearTimeout(timer);
+      }
     }
   }, [pendingPaste, capturedContent, loading, triggerAttach]);
 
@@ -109,14 +113,8 @@ export default function ChatGPTBrowser() {
     setLoading(false);
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(CHATGPT_INJECTION_SCRIPT);
-      // Auto attach only if pending and not yet attached
-      if (pendingPaste && capturedContent && capturedContent.screenshotBase64 && !hasAttachedRef.current) {
-        setTimeout(() => {
-          triggerAttach(false);
-        }, 900);
-      }
     }
-  }, [pendingPaste, capturedContent, triggerAttach]);
+  }, []);
 
   const handleMessage = useCallback((event) => {
     try {
@@ -188,7 +186,7 @@ export default function ChatGPTBrowser() {
                 Screenshot Captured
               </Text>
               <Text style={styles.bannerStatus} numberOfLines={1}>
-                {attachStatus ? '✓ Screenshot attached to chat!' : 'Ready for ChatGPT'}
+                {attachStatus ? '✓ Single screenshot attached' : 'Ready for ChatGPT'}
               </Text>
             </View>
           </View>
@@ -205,7 +203,9 @@ export default function ChatGPTBrowser() {
             <TouchableOpacity
               style={[styles.bannerActionBtn, styles.clearBtn]}
               onPress={() => {
-                hasAttachedRef.current = false;
+                if (capturedContent && capturedContent.postId) {
+                  attachedPostIdsRef.current.delete(capturedContent.postId);
+                }
                 clearCapturedContent();
               }}
             >
@@ -507,7 +507,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 8,
   },
-  modalPasteBtnText: {
+  modalAttachBtnText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700',

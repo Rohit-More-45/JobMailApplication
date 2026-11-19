@@ -22,11 +22,11 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   var state = window.__JOBMAIL_STATE__;
 
-  // Vertical Zoom Function: Scales content vertically with ZERO horizontal blank space
-  window.__JOBMAIL_SET_ZOOM = function(scale) {
+  // Vertical Content Density Adjustment (NO 2D scaling, natural text wrapping across full screen width)
+  window.__JOBMAIL_SET_ZOOM = function(densityLevel) {
     try {
-      var s = parseFloat(scale) || 1.0;
-      var styleId = 'jobmail-vertical-zoom-style';
+      var level = parseFloat(densityLevel) || 1.0;
+      var styleId = 'jobmail-vertical-density-style';
       var styleEl = document.getElementById(styleId);
       if (!styleEl) {
         styleEl = document.createElement('style');
@@ -34,39 +34,104 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         (document.head || document.documentElement).appendChild(styleEl);
       }
 
-      // Rendered width = (100 / s)% * s = exactly 100% full screen width (no blank side gaps)
-      var fullWidthPct = (100 / s).toFixed(3) + '%';
+      if (Math.abs(level - 1.0) < 0.02) {
+        // Reset to default LinkedIn styling
+        styleEl.textContent = '';
+        return 1.0;
+      }
+
+      // Proportional vertical density metrics:
+      // Smaller level = more content fits vertically on screen
+      var commentaryFontSize = Math.max(9, Math.round(15 * level));
+      var actorNameFontSize = Math.max(10, Math.round(14 * level));
+      var actorSubFontSize = Math.max(9, Math.round(12 * level));
+      var lineHeight = (1.05 + 0.35 * Math.max(0.4, (level - 0.4) / 0.8)).toFixed(2);
+      var verticalPadding = Math.max(2, Math.round(12 * level));
+      var verticalMargin = Math.max(2, Math.round(8 * level));
+      var imgMaxHeight = Math.max(140, Math.round(440 * level));
 
       styleEl.textContent = \`
-        html {
+        /* 1. Strictly 100% width with ZERO horizontal blank space */
+        html, body {
           width: 100% !important;
           max-width: 100% !important;
           overflow-x: hidden !important;
+          margin: 0 !important;
+          padding: 0 !important;
         }
-        body {
-          zoom: \` + s + \` !important;
-          width: \` + fullWidthPct + \` !important;
-          min-width: \` + fullWidthPct + \` !important;
-          max-width: \` + fullWidthPct + \` !important;
-          margin-left: 0 !important;
-          margin-right: 0 !important;
-          overflow-x: hidden !important;
+
+        /* 2. Natural text wrapping across the full screen width */
+        p, span, div, h1, h2, h3, h4, a {
+          word-wrap: break-word !important;
+          overflow-wrap: break-word !important;
+          white-space: normal !important;
         }
-        /* Keep all containers full width */
-        main, [role="main"], .scaffold-layout__main, .feed-outlet, .feed-shared-update-v2, [data-view-name="feed-full-update"] {
+
+        /* 3. Post body commentary text density & vertical compaction */
+        .update-components-text,
+        [class*="update-components-text"],
+        [class*="commentary"],
+        [data-view-name="feed-update-text"],
+        .feed-shared-update-v2__description-wrapper {
+          font-size: \` + commentaryFontSize + \`px !important;
+          line-height: \` + lineHeight + \` !important;
+          margin-top: \` + verticalMargin + \`px !important;
+          margin-bottom: \` + verticalMargin + \`px !important;
+        }
+
+        /* 4. Author and headline header vertical compaction */
+        .update-components-actor__name,
+        [class*="actor__name"],
+        [class*="actor__title"] {
+          font-size: \` + actorNameFontSize + \`px !important;
+          line-height: 1.2 !important;
+        }
+
+        .update-components-actor__description,
+        [class*="actor__description"],
+        [class*="actor__sub-description"] {
+          font-size: \` + actorSubFontSize + \`px !important;
+          line-height: 1.15 !important;
+        }
+
+        /* 5. Post container margins & vertical padding */
+        .feed-shared-update-v2,
+        [data-view-name="feed-full-update"],
+        article,
+        .scaffold-layout__main,
+        .feed-outlet,
+        main,
+        [role="main"] {
           width: 100% !important;
           max-width: 100% !important;
+          box-sizing: border-box !important;
+          padding-top: \` + verticalPadding + \`px !important;
+          padding-bottom: \` + verticalPadding + \`px !important;
+          margin-bottom: \` + (verticalMargin * 2) + \`px !important;
         }
-        /* Scale image heights proportionally when zoomed out so entire post fits vertically */
-        img {
-          max-height: \` + Math.round(440 * s) + \`px !important;
+
+        .update-components-actor,
+        [class*="update-components-actor"],
+        .feed-shared-actor {
+          padding-top: \` + Math.max(2, Math.round(verticalPadding / 2)) + \`px !important;
+          padding-bottom: \` + Math.max(2, Math.round(verticalPadding / 2)) + \`px !important;
+          margin-bottom: \` + verticalMargin + \`px !important;
+        }
+
+        /* 6. Constrain attached photo heights so text fits vertically on screen */
+        .feed-shared-update-v2 img,
+        [data-view-name="feed-full-update"] img,
+        [class*="update-components-image"] img,
+        article img {
+          max-height: \` + imgMaxHeight + \`px !important;
+          width: 100% !important;
           object-fit: contain !important;
         }
       \`;
 
-      return s;
+      return level;
     } catch(e) {
-      console.warn('[JobMail] Error in vertical zoom:', e);
+      console.warn('[JobMail] Error in vertical density adjustment:', e);
       return 1.0;
     }
   };
