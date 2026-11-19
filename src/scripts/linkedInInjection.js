@@ -166,58 +166,78 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return fallbackId;
   }
 
-  // 4. Validate if an element is a genuine feed post card
+  // 4. Validate a candidate feed post.
+  // LinkedIn changes its internal markup frequently. Treat its explicit
+  // feed-card markers as authoritative; use content markers only as fallback.
   function isValidPostElement(el) {
     if (!el || el.nodeType !== 1) return false;
 
-    var className = (el.className || '').toString();
-    var id = (el.id || '').toString();
-    var viewName = el.getAttribute('data-view-name') || '';
+    var className = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+    var id = (el.id || '').toLowerCase();
+    var viewName = (el.getAttribute('data-view-name') || '').toLowerCase();
 
-    // Ignore comment cards
+    // Never attach controls to comments, the composer, or page-level wrappers.
     if (
-      (className.indexOf('comment') !== -1 && className.indexOf('feed-shared-update') === -1) ||
       viewName === 'comment' ||
-      id.indexOf('comment') !== -1
-    ) {
-      return false;
-    }
-
-    // Ignore the "Start a post" / share box composer
-    if (
+      id.indexOf('comment') !== -1 ||
+      className.indexOf('comment-item') !== -1 ||
       className.indexOf('share-box') !== -1 ||
       viewName === 'feed-share-box' ||
-      id.indexOf('share-box') !== -1
-    ) {
-      return false;
-    }
-
-    // Must not be the entire container itself
-    if (
-      className.indexOf('scaffold-finite-scroll__content') !== -1 ||
-      className.indexOf('feed-container') !== -1 ||
+      id.indexOf('share-box') !== -1 ||
       el.tagName.toLowerCase() === 'main' ||
-      el.tagName.toLowerCase() === 'body'
-    ) {
-      return false;
-    }
+      el.tagName.toLowerCase() === 'body' ||
+      className.indexOf('scaffold-finite-scroll__content') !== -1 ||
+      className.indexOf('feed-container') !== -1
+    ) return false;
 
-    // Verify it contains post content (author, actor, social actions, text, or links)
-    var hasPostMarkers = el.querySelector(
-      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="social"], [class*="social-actions"], a[href*="/in/"], a[href*="activity"]'
-    ) !== null;
+    // Strong markers used by several LinkedIn feed layouts.
+    var strongCandidate =
+      viewName === 'feed-full-update' ||
+      el.classList.contains('feed-shared-update-v2') ||
+      el.matches('article.feed-shared-update, article[data-activity-id]') ||
+      (el.matches('[data-urn], [data-activity-urn], [data-entity-urn], [data-chameleon-result-urn]') &&
+        /urn:li:(activity|ugcPost|share)/i.test(
+          (el.getAttribute('data-urn') || '') + ' ' +
+          (el.getAttribute('data-activity-urn') || '') + ' ' +
+          (el.getAttribute('data-entity-urn') || '') + ' ' +
+          (el.getAttribute('data-chameleon-result-urn') || '')
+        ));
 
-    return hasPostMarkers;
+    if (strongCandidate) return true;
+
+    // Fallback for feed variants that do not expose the older class names.
+    return !!el.querySelector(
+      '.update-components-actor, [class*="update-components-actor"], ' +
+      '.feed-shared-actor, [class*="feed-shared-actor"], ' +
+      '[data-view-name="feed-social-actions"], ' +
+      '.feed-shared-social-action-bar, [class*="social-actions"]'
+    );
   }
 
-  // 5. Upward climbing from sub-components to post card
+  // 5. Resolve a child element to its containing feed card.
+  // Prefer the direct item inside LinkedIn's finite-scroll feed; this works
+  // even when LinkedIn renames its internal actor/header classes.
   function climbToPostCard(startEl) {
+    if (!startEl || !startEl.closest) return null;
+
+    var feedRoot = startEl.closest(
+      '.scaffold-finite-scroll__content, [data-view-name="scaffold-finite-scroll__content"]'
+    );
+    if (feedRoot) {
+      var item = startEl;
+      while (item.parentElement && item.parentElement !== feedRoot) {
+        item = item.parentElement;
+      }
+      if (item.parentElement === feedRoot && isValidPostElement(item)) {
+        return item;
+      }
+    }
+
     var curr = startEl;
     var candidate = null;
-
-    while (curr && curr !== document.body && curr !== document.documentElement) {
-      // If we hit a share box or comment, reject
-      var cName = (curr.className || '').toString();
+    var depth = 0;
+    while (curr && curr !== document.body && curr !== document.documentElement && depth < 12) {
+      var cName = (typeof curr.className === 'string' ? curr.className : '').toLowerCase();
       if (cName.indexOf('share-box') !== -1 || cName.indexOf('comment-item') !== -1) {
         return null;
       }
@@ -225,24 +245,18 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       if (
         curr.getAttribute('data-view-name') === 'feed-full-update' ||
         curr.classList.contains('feed-shared-update-v2') ||
-        curr.getAttribute('data-urn') ||
-        curr.getAttribute('data-id') ||
-        curr.getAttribute('data-activity-urn') ||
-        curr.tagName.toLowerCase() === 'article' ||
-        (curr.parentElement && (
-          curr.parentElement.classList.contains('scaffold-finite-scroll__content') ||
-          curr.parentElement.getAttribute('role') === 'main'
-        ))
+        curr.matches('article[data-activity-id], article') ||
+        /urn:li:(activity|ugcPost|share)/i.test(
+          (curr.getAttribute('data-urn') || '') + ' ' +
+          (curr.getAttribute('data-activity-urn') || '') + ' ' +
+          (curr.getAttribute('data-entity-urn') || '')
+        )
       ) {
         candidate = curr;
-        if (curr.parentElement && curr.parentElement.classList.contains('scaffold-finite-scroll__content')) {
-          return curr;
-        }
       }
-
       curr = curr.parentElement;
+      depth++;
     }
-
     return candidate;
   }
 
@@ -259,6 +273,10 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     // Strategy 1: Direct structural selectors
     var directSelectors = [
       '[data-view-name="feed-full-update"]',
+      '[data-view-name*="feed"][data-view-name*="update"]',
+      '.feed-shared-update-v2',
+      'article[data-activity-id]',
+      '[data-chameleon-result-urn]',
       'div.feed-shared-update-v2',
       'div[class*="feed-shared-update-v2"]',
       'div[data-urn*="urn:li:activity"]',
@@ -294,7 +312,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       for (var ch = 0; ch < children.length; ch++) {
         var child = children[ch];
         if (child.classList.contains('occludable-update')) {
-          var inner = child.querySelector('.feed-shared-update-v2, [data-view-name="feed-full-update"], [data-urn], [data-id]') || child.firstElementChild || child;
+          var inner = child.querySelector('[data-view-name="feed-full-update"], .feed-shared-update-v2, [data-urn*="urn:li:activity"], [data-urn*="urn:li:ugcPost"], [data-urn*="urn:li:share"]') || child;
           addIfValid(inner);
         } else {
           addIfValid(child);
@@ -304,7 +322,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
     // Strategy 3: Upward traversal from Actor headers
     var actors = document.querySelectorAll(
-      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"]'
+      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="actor"]'
     );
     for (var a = 0; a < actors.length; a++) {
       var cardFromActor = climbToPostCard(actors[a]);
@@ -515,12 +533,15 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       }
     });
 
-    if (posts.length !== state.lastScannedCount || newButtonsCount > 0) {
+    if (posts.length !== state.lastScannedCount || newButtonsCount > 0 || reason === 'initial_setup') {
       state.lastScannedCount = posts.length;
       sendLog('POSTS_SCANNED', {
         reason: reason || 'scan',
         postsDetected: posts.length,
         newButtonsInserted: newButtonsCount,
+        feedRootCount: document.querySelectorAll('.scaffold-finite-scroll__content, [data-view-name="scaffold-finite-scroll__content"]').length,
+        explicitFeedCardCount: document.querySelectorAll('[data-view-name="feed-full-update"], [data-view-name*="feed"][data-view-name*="update"], .feed-shared-update-v2, article[data-activity-id]').length,
+        actorMarkerCount: document.querySelectorAll('.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="actor"]').length,
         selectedPostId: state.selectedPostId,
         url: window.location.href
       });
