@@ -33,6 +33,13 @@
     "plugins": [
       "expo-font",
       "expo-router"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "741ed24f-ad9e-49d0-a4f6-c8e7c53bdf19"
+      }
+    },
+    "owner": "rohitmore45"
   }
 }
