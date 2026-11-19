@@ -33,6 +33,7 @@ export default function LinkedInBrowser() {
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [detectedCount, setDetectedCount] = useState(0);
 
   // Register WebView ref with context
   useEffect(() => {
@@ -65,8 +66,18 @@ export default function LinkedInBrowser() {
     (event) => {
       try {
         const data = JSON.parse(event.nativeEvent.data);
-        if (data && data.type === 'SELECTION_CHANGED') {
+        if (!data) return;
+
+        if (data.type === 'SELECTION_CHANGED') {
           setSelectedPostId(data.postId || null);
+        } else if (data.type === 'DEBUG_LOG') {
+          console.log(
+            `[JobMail Debug] ${data.subType}:`,
+            JSON.stringify(data.details)
+          );
+          if (data.subType === 'POSTS_SCANNED' && data.details) {
+            setDetectedCount(data.details.postsDetected || 0);
+          }
         }
       } catch (_err) {
         // Not a JSON message or unexpected format
@@ -79,6 +90,34 @@ export default function LinkedInBrowser() {
     setCanGoBack(navState.canGoBack);
     setCurrentUrl(navState.url);
     setLoading(navState.loading);
+
+    // Re-inject on navigation / URL change if page has loaded
+    if (!navState.loading && webViewRef.current) {
+      try {
+        webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
+        webViewRef.current.injectJavaScript(`
+          if (window.__JOBMAIL_TRIGGER_SCAN) {
+            window.__JOBMAIL_TRIGGER_SCAN('navigationStateChange');
+          }
+          true;
+        `);
+      } catch (_e) {}
+    }
+  }, []);
+
+  const handleLoadEnd = useCallback(() => {
+    setLoading(false);
+    if (webViewRef.current) {
+      try {
+        webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
+        webViewRef.current.injectJavaScript(`
+          if (window.__JOBMAIL_TRIGGER_SCAN) {
+            window.__JOBMAIL_TRIGGER_SCAN('onLoadEnd');
+          }
+          true;
+        `);
+      } catch (_e) {}
+    }
   }, []);
 
   const handleReload = useCallback(() => {
@@ -119,6 +158,7 @@ export default function LinkedInBrowser() {
         onGoFeed={handleGoFeed}
         currentUrl={currentUrl}
         loading={loading}
+        detectedCount={detectedCount}
       />
 
       <View style={styles.webViewContainer}>
@@ -152,6 +192,7 @@ export default function LinkedInBrowser() {
             )}
             injectedJavaScriptBeforeContentLoaded={LINKEDIN_INJECTION_SCRIPT}
             injectedJavaScript={LINKEDIN_INJECTION_SCRIPT}
+            onLoadEnd={handleLoadEnd}
             onMessage={handleMessage}
             onNavigationStateChange={handleNavigationStateChange}
             onError={handleError}

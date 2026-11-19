@@ -11,6 +11,7 @@ export default function BrowserHeader({
   onGoFeed,
   currentUrl = '',
   loading = false,
+  detectedCount = 0,
 }) {
   const insets = useSafeAreaInsets();
   const { isSelected, clearSelection } = useSelection();
@@ -83,9 +84,11 @@ export default function BrowserHeader({
           </View>
         ) : (
           <View style={styles.selectionPillInactive}>
-            <Ionicons name="radio-button-off" size={14} color="#64748b" />
+            <Ionicons name="radio-button-off" size={14} color="#0a66c2" />
             <Text style={styles.selectionTextInactive}>
-              Tap the circular radio button on any post to select
+              {detectedCount > 0
+                ? `${detectedCount} posts ready – tap radio to select`
+                : 'Tap the circular radio button on any post to select'}
             </Text>
           </View>
         )}
