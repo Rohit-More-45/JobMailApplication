@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   BackHandler,
   Platform,
+  Image,
+  Modal,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -32,12 +34,17 @@ export default function ChatGPTBrowser() {
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [pastedStatus, setPastedStatus] = useState(false);
+  const [previewModalVisible, setPreviewModalVisible] = useState(false);
 
   // Hardware back button on Android
   useEffect(() => {
     if (Platform.OS !== 'android') return;
 
     const onBackPress = () => {
+      if (previewModalVisible) {
+        setPreviewModalVisible(false);
+        return true;
+      }
       if (canGoBack && webViewRef.current) {
         webViewRef.current.goBack();
         return true;
@@ -47,19 +54,24 @@ export default function ChatGPTBrowser() {
 
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => sub.remove();
-  }, [canGoBack]);
+  }, [canGoBack, previewModalVisible]);
 
-  // Execute paste into ChatGPT
+  // Execute paste into ChatGPT (injects both clean post text and screenshot)
   const triggerPaste = useCallback(() => {
-    if (!capturedContent || !capturedContent.fullContent || !webViewRef.current) return;
+    if (!capturedContent || !webViewRef.current) return;
 
-    const escapedText = JSON.stringify(capturedContent.fullContent);
+    const textContent = capturedContent.fullContent || '';
+    const base64Img = capturedContent.screenshotBase64 || '';
+
+    const escapedText = JSON.stringify(textContent);
+    const escapedBase64 = JSON.stringify(base64Img);
+
     webViewRef.current.injectJavaScript(`
       if (window.__JOBMAIL_PASTE_INTO_CHATGPT) {
-        window.__JOBMAIL_PASTE_INTO_CHATGPT(${escapedText});
+        window.__JOBMAIL_PASTE_INTO_CHATGPT(${escapedText}, ${escapedBase64});
       } else {
         ${CHATGPT_INJECTION_SCRIPT}
-        window.__JOBMAIL_PASTE_INTO_CHATGPT(${escapedText});
+        window.__JOBMAIL_PASTE_INTO_CHATGPT(${escapedText}, ${escapedBase64});
       }
       true;
     `);
@@ -74,7 +86,7 @@ export default function ChatGPTBrowser() {
     if (pendingPaste && capturedContent && !loading) {
       const timer = setTimeout(() => {
         triggerPaste();
-      }, 800);
+      }, 700);
       return () => clearTimeout(timer);
     }
   }, [pendingPaste, capturedContent, loading, triggerPaste]);
@@ -86,7 +98,7 @@ export default function ChatGPTBrowser() {
       if (pendingPaste && capturedContent) {
         setTimeout(() => {
           triggerPaste();
-        }, 1000);
+        }, 900);
       }
     }
   }, [pendingPaste, capturedContent, triggerPaste]);
@@ -136,20 +148,46 @@ export default function ChatGPTBrowser() {
         </View>
       </View>
 
-      {/* Extracted Content Banner */}
+      {/* Extracted Content & Screenshot Banner */}
       {capturedContent && (
         <View style={styles.bannerContainer}>
-          <View style={styles.bannerInfo}>
-            <Ionicons
-              name={pastedStatus ? 'checkmark-circle' : 'clipboard'}
-              size={18}
-              color={pastedStatus ? '#059669' : '#0a66c2'}
-            />
-            <Text style={styles.bannerText} numberOfLines={1}>
-              {pastedStatus
-                ? 'Pasted into ChatGPT prompt!'
-                : `Post ready (${capturedContent.author || 'Captured post'})`}
-            </Text>
+          <View style={styles.bannerLeft}>
+            {/* Screenshot Thumbnail */}
+            {capturedContent.screenshotUri ? (
+              <TouchableOpacity
+                onPress={() => setPreviewModalVisible(true)}
+                activeOpacity={0.8}
+                style={styles.thumbnailWrapper}
+              >
+                <Image
+                  source={{ uri: capturedContent.screenshotUri }}
+                  style={styles.thumbnail}
+                  resizeMode="cover"
+                />
+                <View style={styles.zoomBadge}>
+                  <Ionicons name="expand" size={10} color="#ffffff" />
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.iconThumb}>
+                <Ionicons
+                  name={pastedStatus ? 'checkmark-circle' : 'camera'}
+                  size={20}
+                  color={pastedStatus ? '#059669' : '#0a66c2'}
+                />
+              </View>
+            )}
+
+            <View style={styles.bannerInfo}>
+              <Text style={styles.bannerTitle} numberOfLines={1}>
+                {capturedContent.author && capturedContent.author !== 'LinkedIn Post'
+                  ? capturedContent.author
+                  : 'Captured Post & Screenshot'}
+              </Text>
+              <Text style={styles.bannerStatus} numberOfLines={1}>
+                {pastedStatus ? '✓ Pasted into ChatGPT!' : 'Ready to paste'}
+              </Text>
+            </View>
           </View>
 
           <View style={styles.bannerButtons}>
@@ -169,6 +207,47 @@ export default function ChatGPTBrowser() {
             </TouchableOpacity>
           </View>
         </View>
+      )}
+
+      {/* Full Screenshot Preview Modal */}
+      {capturedContent && capturedContent.screenshotUri && (
+        <Modal
+          visible={previewModalVisible}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setPreviewModalVisible(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Captured Post Screenshot</Text>
+                <TouchableOpacity
+                  onPress={() => setPreviewModalVisible(false)}
+                  style={styles.modalCloseBtn}
+                >
+                  <Ionicons name="close" size={22} color="#ffffff" />
+                </TouchableOpacity>
+              </View>
+
+              <Image
+                source={{ uri: capturedContent.screenshotUri }}
+                style={styles.modalImage}
+                resizeMode="contain"
+              />
+
+              <TouchableOpacity
+                style={styles.modalPasteBtn}
+                onPress={() => {
+                  setPreviewModalVisible(false);
+                  triggerPaste();
+                }}
+              >
+                <Ionicons name="arrow-down-circle" size={18} color="#ffffff" />
+                <Text style={styles.modalPasteBtnText}>Paste Post & Screenshot to ChatGPT</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       )}
 
       {/* ChatGPT WebView */}
@@ -252,43 +331,82 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#059669',
+    textTransform: 'uppercase',
   },
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 12,
   },
   iconButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#f8fafc',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#f1f5f9',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
   },
+
+  // Banner
   bannerContainer: {
+    backgroundColor: '#f0fdf4',
+    borderBottomWidth: 1,
+    borderBottomColor: '#bbf7d0',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#eff6ff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#bfdbfe',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+  },
+  bannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+    marginRight: 8,
+  },
+  thumbnailWrapper: {
+    width: 40,
+    height: 40,
+    borderRadius: 6,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: '#10a37f',
+    position: 'relative',
+  },
+  thumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  zoomBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    padding: 2,
+    borderTopLeftRadius: 4,
+  },
+  iconThumb: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#e0f2fe',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   bannerInfo: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginRight: 8,
   },
-  bannerText: {
-    fontSize: 12,
+  bannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  bannerStatus: {
+    fontSize: 11,
+    color: '#059669',
     fontWeight: '600',
-    color: '#1e40af',
+    marginTop: 1,
   },
   bannerButtons: {
     flexDirection: 'row',
@@ -296,15 +414,15 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   bannerActionBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
     gap: 4,
   },
   pasteBtn: {
-    backgroundColor: '#0a66c2',
+    backgroundColor: '#10a37f',
   },
   pasteBtnText: {
     color: '#ffffff',
@@ -312,19 +430,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   clearBtn: {
-    backgroundColor: '#e2e8f0',
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
   },
   clearBtnText: {
-    color: '#475569',
+    color: '#64748b',
     fontSize: 12,
     fontWeight: '600',
   },
+
+  // WebView
   webViewWrapper: {
     flex: 1,
-    backgroundColor: '#f9f9f9',
+    backgroundColor: '#ffffff',
   },
   webView: {
     flex: 1,
+    backgroundColor: '#ffffff',
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -337,5 +460,57 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     fontWeight: '500',
+  },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalContent: {
+    width: '100%',
+    maxHeight: '90%',
+    backgroundColor: '#0f172a',
+    borderRadius: 14,
+    overflow: 'hidden',
+    padding: 14,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  modalTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  modalCloseBtn: {
+    padding: 4,
+  },
+  modalImage: {
+    width: '100%',
+    height: 420,
+    borderRadius: 8,
+    backgroundColor: '#1e293b',
+  },
+  modalPasteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10a37f',
+    borderRadius: 8,
+    paddingVertical: 12,
+    marginTop: 12,
+    gap: 8,
+  },
+  modalPasteBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

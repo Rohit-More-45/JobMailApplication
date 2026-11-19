@@ -11,6 +11,7 @@ import {
 import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import ViewShot, { captureRef } from 'react-native-view-shot';
 import { LINKEDIN_INJECTION_SCRIPT } from '../scripts/linkedInInjection';
 import { useSelection } from '../context/SelectionContext';
 import BrowserHeader from './BrowserHeader';
@@ -27,6 +28,10 @@ const CUSTOM_USER_AGENT = Platform.select({
 
 export default function LinkedInBrowser() {
   const webViewRef = useRef(null);
+  const viewShotRef = useRef(null);
+  const pendingScreenshotRef = useRef(null);
+  const fallbackTimerRef = useRef(null);
+
   const { setSelectedPostId, isSelected, registerWebView, setCapturedContent } = useSelection();
 
   const [canGoBack, setCanGoBack] = useState(false);
@@ -36,12 +41,26 @@ export default function LinkedInBrowser() {
   const [errorMessage, setErrorMessage] = useState('');
   const [detectedCount, setDetectedCount] = useState(0);
 
+  // Minimize / Maximize toggle state (- and +)
+  const [isMinimized, setIsMinimized] = useState(false);
+  // Capturing state to temporarily hide overlays during screenshot
+  const [isCapturing, setIsCapturing] = useState(false);
+
   // Register WebView ref with context
   useEffect(() => {
     if (webViewRef.current) {
       registerWebView(webViewRef.current);
     }
   }, [registerWebView]);
+
+  // Clean up fallback timer on unmount
+  useEffect(() => {
+    return () => {
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+      }
+    };
+  }, []);
 
   // Android hardware back button handling
   useEffect(() => {
@@ -62,23 +81,6 @@ export default function LinkedInBrowser() {
     return () => subscription.remove();
   }, [canGoBack]);
 
-  // Trigger post extraction from the LinkedIn WebView
-  const handleExtractAndSend = useCallback(() => {
-    if (webViewRef.current) {
-      webViewRef.current.injectJavaScript(`
-        if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
-          window.__JOBMAIL_EXTRACT_VISIBLE_POST();
-        } else {
-          ${LINKEDIN_INJECTION_SCRIPT}
-          if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
-            window.__JOBMAIL_EXTRACT_VISIBLE_POST();
-          }
-        }
-        true;
-      `);
-    }
-  }, []);
-
   // Handle messages from injected JavaScript
   const handleMessage = useCallback(
     (event) => {
@@ -89,8 +91,23 @@ export default function LinkedInBrowser() {
         if (data.type === 'SELECTION_CHANGED') {
           setSelectedPostId(data.postId || null);
         } else if (data.type === 'POST_EXTRACTED' && data.data) {
-          // Clear previous and set new captured content
-          setCapturedContent(data.data);
+          if (fallbackTimerRef.current) {
+            clearTimeout(fallbackTimerRef.current);
+            fallbackTimerRef.current = null;
+          }
+
+          // Combine with captured screenshot
+          const screenshotData = pendingScreenshotRef.current || {};
+          const combinedContent = {
+            ...data.data,
+            screenshotUri: screenshotData.screenshotUri || null,
+            screenshotBase64: screenshotData.screenshotBase64 || null,
+          };
+
+          // Store in context and clipboard
+          setCapturedContent(combinedContent);
+          setIsCapturing(false);
+
           // Navigate to ChatGPT tab
           router.push('/(tabs)/chatgpt');
         } else if (data.type === 'DEBUG_LOG') {
@@ -108,6 +125,73 @@ export default function LinkedInBrowser() {
     },
     [setSelectedPostId, setCapturedContent]
   );
+
+  // Capture Screenshot & Extract Post & Send to ChatGPT
+  const handleCaptureAndSend = useCallback(async () => {
+    try {
+      setIsCapturing(true);
+
+      // Brief delay to allow overlays to hide before snapshotting
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      let screenshotUri = null;
+      let screenshotBase64 = null;
+
+      // 1. Take screenshot of visible WebView
+      if (viewShotRef.current) {
+        try {
+          const dataUri = await captureRef(viewShotRef.current, {
+            format: 'png',
+            quality: 0.85,
+            result: 'data-uri',
+          });
+          screenshotUri = dataUri;
+          if (dataUri && dataUri.includes(',')) {
+            screenshotBase64 = dataUri.split(',')[1];
+          }
+        } catch (captureErr) {
+          console.warn('[LinkedInBrowser] captureRef error:', captureErr);
+        }
+      }
+
+      pendingScreenshotRef.current = { screenshotUri, screenshotBase64 };
+
+      // 2. Trigger clean post content extraction in WebView
+      if (webViewRef.current) {
+        webViewRef.current.injectJavaScript(`
+          if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
+            window.__JOBMAIL_EXTRACT_VISIBLE_POST();
+          } else {
+            ${LINKEDIN_INJECTION_SCRIPT}
+            if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
+              window.__JOBMAIL_EXTRACT_VISIBLE_POST();
+            }
+          }
+          true;
+        `);
+      }
+
+      // 3. Fallback safety timer: if no POST_EXTRACTED message within 1.5s, proceed with screenshot
+      fallbackTimerRef.current = setTimeout(() => {
+        setIsCapturing(false);
+        const fallbackContent = {
+          author: 'LinkedIn Post',
+          headline: '',
+          text: 'Captured LinkedIn Post Screenshot',
+          photos: [],
+          fullContent: 'Captured LinkedIn Post Screenshot',
+          screenshotUri: screenshotUri,
+          screenshotBase64: screenshotBase64,
+          postId: 'screenshot_' + Date.now(),
+        };
+        setCapturedContent(fallbackContent);
+        router.push('/(tabs)/chatgpt');
+      }, 1500);
+    } catch (e) {
+      console.warn('[LinkedInBrowser] handleCaptureAndSend error:', e);
+      setIsCapturing(false);
+    }
+  }, [setCapturedContent]);
 
   const handleNavigationStateChange = useCallback((navState) => {
     setCanGoBack(navState.canGoBack);
@@ -173,16 +257,19 @@ export default function LinkedInBrowser() {
 
   return (
     <View style={styles.container}>
-      <BrowserHeader
-        canGoBack={canGoBack}
-        onGoBack={handleGoBack}
-        onReload={handleReload}
-        onGoFeed={handleGoFeed}
-        onSendToChatGPT={handleExtractAndSend}
-        currentUrl={currentUrl}
-        loading={loading}
-        detectedCount={detectedCount}
-      />
+      {/* Top Header */}
+      {!isCapturing && (
+        <BrowserHeader
+          canGoBack={canGoBack}
+          onGoBack={handleGoBack}
+          onReload={handleReload}
+          onGoFeed={handleGoFeed}
+          onSendToChatGPT={handleCaptureAndSend}
+          currentUrl={currentUrl}
+          loading={loading}
+          detectedCount={detectedCount}
+        />
+      )}
 
       <View style={styles.webViewContainer}>
         {hasError ? (
@@ -194,54 +281,101 @@ export default function LinkedInBrowser() {
             </TouchableOpacity>
           </View>
         ) : (
-          <WebView
-            ref={webViewRef}
-            source={{ uri: LINKEDIN_FEED_URL }}
-            style={styles.webView}
-            userAgent={CUSTOM_USER_AGENT}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            sharedCookiesEnabled={true}
-            thirdPartyCookiesEnabled={true}
-            allowsInlineMediaPlayback={true}
-            mediaPlaybackRequiresUserAction={true}
-            scalesPageToFit={true}
-            startInLoadingState={true}
-            renderLoading={() => (
-              <View style={styles.loadingOverlay}>
-                <ActivityIndicator size="large" color="#0a66c2" />
-                <Text style={styles.loadingText}>Loading LinkedIn...</Text>
-              </View>
-            )}
-            injectedJavaScriptBeforeContentLoaded={LINKEDIN_INJECTION_SCRIPT}
-            injectedJavaScript={LINKEDIN_INJECTION_SCRIPT}
-            onLoadEnd={handleLoadEnd}
-            onMessage={handleMessage}
-            onNavigationStateChange={handleNavigationStateChange}
-            onError={handleError}
-            onHttpError={(syntheticEvent) => {
-              const { nativeEvent } = syntheticEvent;
-              if (nativeEvent.statusCode >= 500) {
-                setHasError(true);
-                setErrorMessage(`HTTP Server Error ${nativeEvent.statusCode}`);
-              }
-            }}
-          />
+          <ViewShot
+            ref={viewShotRef}
+            options={{ format: 'png', quality: 0.85 }}
+            style={styles.viewShotContainer}
+          >
+            <WebView
+              ref={webViewRef}
+              source={{ uri: LINKEDIN_FEED_URL }}
+              style={styles.webView}
+              userAgent={CUSTOM_USER_AGENT}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              sharedCookiesEnabled={true}
+              thirdPartyCookiesEnabled={true}
+              allowsInlineMediaPlayback={true}
+              mediaPlaybackRequiresUserAction={true}
+              scalesPageToFit={true}
+              startInLoadingState={true}
+              renderLoading={() => (
+                <View style={styles.loadingOverlay}>
+                  <ActivityIndicator size="large" color="#0a66c2" />
+                  <Text style={styles.loadingText}>Loading LinkedIn...</Text>
+                </View>
+              )}
+              injectedJavaScriptBeforeContentLoaded={LINKEDIN_INJECTION_SCRIPT}
+              injectedJavaScript={LINKEDIN_INJECTION_SCRIPT}
+              onLoadEnd={handleLoadEnd}
+              onMessage={handleMessage}
+              onNavigationStateChange={handleNavigationStateChange}
+              onError={handleError}
+              onHttpError={(syntheticEvent) => {
+                const { nativeEvent } = syntheticEvent;
+                if (nativeEvent.statusCode >= 500) {
+                  setHasError(true);
+                  setErrorMessage(`HTTP Server Error ${nativeEvent.statusCode}`);
+                }
+              }}
+            />
+          </ViewShot>
         )}
 
-        {/* Floating Action Button (FAB) over feed */}
-        <TouchableOpacity
-          style={styles.floatingButton}
-          onPress={handleExtractAndSend}
-          activeOpacity={0.88}
-        >
-          <View style={styles.fabIconBadge}>
-            <Ionicons name="sparkles" size={16} color="#ffffff" />
-          </View>
-          <Text style={styles.floatingButtonText}>
-            {isSelected ? 'Send Selected Post ➔' : 'Send Visible Post to ChatGPT ➔'}
-          </Text>
-        </TouchableOpacity>
+        {/* Floating Capture Overlay with Minimize (-) and Maximize (+) */}
+        {!isCapturing && (
+          isMinimized ? (
+            /* Minimized State: Sleek compact FAB with + toggle and camera button */
+            <View style={styles.minimizedContainer}>
+              <TouchableOpacity
+                style={styles.minimizedExpandBtn}
+                onPress={() => setIsMinimized(false)}
+                accessibilityLabel="Maximize Controls (+)"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="add" size={22} color="#ffffff" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.minimizedCaptureBtn}
+                onPress={handleCaptureAndSend}
+                accessibilityLabel="Capture Post & Screenshot"
+                activeOpacity={0.85}
+              >
+                <Ionicons name="camera" size={20} color="#ffffff" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* Maximized State: Floating action bar with - minimize button */
+            <View style={styles.maximizedContainer}>
+              {/* Minus (-) Minimize Button */}
+              <TouchableOpacity
+                style={styles.minimizeBtn}
+                onPress={() => setIsMinimized(true)}
+                accessibilityLabel="Minimize Controls (-)"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="remove" size={20} color="#ffffff" />
+              </TouchableOpacity>
+
+              {/* Main Action Button */}
+              <TouchableOpacity
+                style={styles.floatingButton}
+                onPress={handleCaptureAndSend}
+                activeOpacity={0.88}
+              >
+                <View style={styles.fabIconBadge}>
+                  <Ionicons name="camera" size={16} color="#ffffff" />
+                </View>
+                <Text style={styles.floatingButtonText} numberOfLines={1}>
+                  {isSelected
+                    ? '📸 Capture Selected Post & Send ➔'
+                    : '📸 Capture Post & Send to ChatGPT ➔'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )
+        )}
       </View>
     </View>
   );
@@ -256,6 +390,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f3f2ef',
     position: 'relative',
+  },
+  viewShotContainer: {
+    flex: 1,
+    backgroundColor: '#f3f2ef',
   },
   webView: {
     flex: 1,
@@ -304,14 +442,37 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  floatingButton: {
+
+  // Maximized Container with (-) and Main Button
+  maximizedContainer: {
     position: 'absolute',
     bottom: 18,
-    right: 16,
-    left: 16,
+    left: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  minimizeBtn: {
+    width: 44,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#1e293b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+  },
+  floatingButton: {
+    flex: 1,
+    height: 48,
     backgroundColor: '#0a66c2',
-    borderRadius: 28,
-    paddingVertical: 12,
+    borderRadius: 24,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
@@ -326,17 +487,57 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.4)',
   },
   fabIconBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: '#10a37f',
     alignItems: 'center',
     justifyContent: 'center',
   },
   floatingButtonText: {
     color: '#ffffff',
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '700',
     letterSpacing: -0.2,
+  },
+
+  // Minimized Container with (+) and Quick Camera
+  minimizedContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  minimizedExpandBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#1e293b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  minimizedCaptureBtn: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#0a66c2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 7,
+    shadowColor: '#0a66c2',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    borderWidth: 2,
+    borderColor: '#ffffff',
   },
 });

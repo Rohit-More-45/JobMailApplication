@@ -1,11 +1,11 @@
 /**
- * JobMail - LinkedIn Feed Post Detection & Content Extraction Script (v4)
+ * JobMail - LinkedIn Feed Post Detection & Content Extraction Script (v5)
  *
  * Designed to reliably:
- * 1. Capture the LinkedIn post visible on the user's screen using elementFromPoint sampling.
- * 2. Automatically expand all "...see more" buttons to extract all visible and non-visible text.
- * 3. Extract author, headline, full body text, and all attached photos.
- * 4. Fall back to direct viewport harvesting so post extraction NEVER fails.
+ * 1. Capture ONLY the main visible post with ZERO noise from adjacent posts or reaction counts.
+ * 2. Climb DOM hierarchy to isolate the exact single-post container using single-actor boundaries.
+ * 3. Automatically expand all "...see more" buttons to extract all full post text.
+ * 4. Extract author, headline, clean body text, and attached photos.
  * 5. Send structured content to React Native via window.ReactNativeWebView.postMessage.
  */
 
@@ -41,7 +41,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   // 2. CSS Styles Injection
   function injectStyles() {
-    var styleId = 'jobmail-injected-styles-v4';
+    var styleId = 'jobmail-injected-styles-v5';
     var existingStyle = document.getElementById(styleId);
     if (existingStyle) return;
 
@@ -157,7 +157,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return fallbackId;
   }
 
-  // 4. Find Post Card From Any Node
+  // 4. Find Post Card From Any Node using Single-Actor Boundary Climbing
   function findPostCardFromNode(node) {
     if (!node || node === document.body || node === document.documentElement) return null;
 
@@ -165,7 +165,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     var candidate = null;
 
     while (curr && curr !== document.body && curr !== document.documentElement) {
-      if (curr.classList && (curr.classList.contains('jobmail-radio-container') || curr.id === 'jobmail-injected-styles-v4')) {
+      if (curr.classList && (curr.classList.contains('jobmail-radio-container') || curr.id === 'jobmail-injected-styles-v5')) {
         return null;
       }
 
@@ -182,6 +182,18 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         return curr;
       }
 
+      var parent = curr.parentElement;
+      if (parent) {
+        var actorsInParent = parent.querySelectorAll(
+          '.update-components-actor, [class*="update-components-actor"], [class*="actor__name"], [class*="actor__title"], .feed-shared-actor'
+        );
+        if (actorsInParent.length > 1) {
+          // Parent is the feed container holding multiple posts.
+          // Therefore, curr is the exact single post card!
+          return curr;
+        }
+      }
+
       var rect = curr.getBoundingClientRect();
       if (rect.height > 120) {
         var text = (curr.innerText || '').trim();
@@ -190,12 +202,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
         if (hasActor && hasButtons && text.length > 35) {
           candidate = curr;
-          if (curr.parentElement && curr.parentElement.children.length > 1) {
-            var pRect = curr.parentElement.getBoundingClientRect();
-            if (pRect.height > rect.height * 1.2) {
-              return curr;
-            }
-          }
         }
       }
 
@@ -248,22 +254,75 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return postsSet;
   }
 
-  // 6. Locate the Post Currently Visible on User's Screen
+  // 6. Locate STRICTLY the Main Post Currently Visible on User's Screen (Zero Noise)
   function getVisibleFeedPost() {
-    // Priority 1: User explicitly selected post
+    // Priority 1: User explicitly selected post via radio button
     if (state.selectedPostId) {
       var selectedEl = document.querySelector('[data-jobmail-post-id="' + state.selectedPostId + '"]');
       if (selectedEl) return selectedEl;
     }
 
-    var vWidth = window.innerWidth || document.documentElement.clientWidth || 360;
     var vHeight = window.innerHeight || document.documentElement.clientHeight || 640;
-    var centerX = vWidth / 2;
+    var vCenter = vHeight / 2;
 
-    // Priority 2: Sample elementFromPoint at center of screen
-    var sampleFractions = [0.45, 0.55, 0.35, 0.65, 0.25, 0.75];
-    for (var i = 0; i < sampleFractions.length; i++) {
-      var y = vHeight * sampleFractions[i];
+    // Priority 2: Find the actor/author header closest to screen vertical center
+    var actors = document.querySelectorAll(
+      '.update-components-actor, [class*="update-components-actor"], [class*="actor__name"], [class*="actor__title"], .feed-shared-actor'
+    );
+    var bestActor = null;
+    var bestDist = Infinity;
+
+    for (var i = 0; i < actors.length; i++) {
+      var rect = actors[i].getBoundingClientRect();
+      if (rect.bottom > 40 && rect.top < vHeight - 40) {
+        var dist = Math.abs((rect.top + rect.bottom) / 2 - vCenter);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestActor = actors[i];
+        }
+      }
+    }
+
+    // Climb from bestActor to the single post card boundary
+    if (bestActor) {
+      var curr = bestActor;
+      var postCard = null;
+      while (curr && curr !== document.body && curr !== document.documentElement) {
+        var parent = curr.parentElement;
+        if (!parent) break;
+
+        var actorsInParent = parent.querySelectorAll(
+          '.update-components-actor, [class*="update-components-actor"], [class*="actor__name"], [class*="actor__title"], .feed-shared-actor'
+        );
+        if (actorsInParent.length > 1) {
+          postCard = curr;
+          break;
+        }
+
+        var vName = curr.getAttribute('data-view-name') || '';
+        var cName = (curr.className || '').toString();
+        var dUrn = curr.getAttribute('data-urn') || '';
+        if (
+          vName === 'feed-full-update' ||
+          cName.indexOf('feed-shared-update') !== -1 ||
+          dUrn.indexOf('urn:li:activity') !== -1 ||
+          curr.tagName.toLowerCase() === 'article'
+        ) {
+          postCard = curr;
+          break;
+        }
+
+        curr = parent;
+      }
+      return postCard || curr || bestActor;
+    }
+
+    // Priority 3: Sample elementFromPoint at center of screen
+    var vWidth = window.innerWidth || 360;
+    var centerX = vWidth / 2;
+    var sampleFractions = [0.5, 0.4, 0.6, 0.3, 0.7];
+    for (var s = 0; s < sampleFractions.length; s++) {
+      var y = vHeight * sampleFractions[s];
       var elAtPoint = document.elementFromPoint(centerX, y);
       if (elAtPoint) {
         var card = findPostCardFromNode(elAtPoint);
@@ -271,93 +330,18 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       }
     }
 
-    // Priority 3: Scan visible actors / cards
-    var signatures = document.querySelectorAll(
-      '[class*="actor"], button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="Follow" i], [class*="update-components-text"], [class*="feed-shared"]'
-    );
-    var bestCard = null;
-    var bestDist = Infinity;
-    var vCenter = vHeight / 2;
-
-    signatures.forEach(function(sig) {
-      var rect = sig.getBoundingClientRect();
-      if (rect.bottom > 60 && rect.top < vHeight - 60) {
-        var c = findPostCardFromNode(sig);
-        if (c) {
-          var cRect = c.getBoundingClientRect();
-          var dist = Math.abs((cRect.top + cRect.bottom) / 2 - vCenter);
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestCard = c;
-          }
-        }
-      }
-    });
-
-    if (bestCard) return bestCard;
-
-    // Priority 4: Any visible container with text in center
+    // Priority 4: Any visible feed post
     var posts = findFeedPosts();
-    if (posts && posts.length > 0) {
-      for (var p = 0; p < posts.length; p++) {
-        var pR = posts[p].getBoundingClientRect();
-        if (pR.bottom > 60 && pR.top < vHeight - 60) {
-          return posts[p];
-        }
+    for (var p = 0; p < posts.length; p++) {
+      var pR = posts[p].getBoundingClientRect();
+      if (pR.bottom > 80 && pR.top < vHeight - 80) {
+        return posts[p];
       }
-      return posts[0];
     }
-
-    return null;
+    return posts.length > 0 ? posts[0] : null;
   }
 
-  // 7. Direct Viewport Text Harvesting (Ultimate Fail-Safe)
-  function extractDirectFromViewport() {
-    var vHeight = window.innerHeight || 640;
-    var visibleText = [];
-    var visiblePhotos = [];
-    var seenText = new Set();
-
-    var allElements = document.querySelectorAll('p, span, h1, h2, h3, h4, div, a');
-    allElements.forEach(function(el) {
-      if (el.children.length > 2) return;
-      var rect = el.getBoundingClientRect();
-      if (rect.bottom > 70 && rect.top < vHeight - 70 && rect.height > 8 && rect.width > 20) {
-        var t = (el.innerText || el.textContent || '').trim();
-        if (t.length > 4 && !seenText.has(t)) {
-          if (!t.includes('JobMail') && !t.includes('ChatGPT') && !t.includes('LinkedIn')) {
-            seenText.add(t);
-            visibleText.push(t);
-          }
-        }
-      }
-    });
-
-    var allImgs = document.querySelectorAll('img');
-    allImgs.forEach(function(img) {
-      var rect = img.getBoundingClientRect();
-      if (rect.bottom > 70 && rect.top < vHeight - 70 && rect.width > 90 && rect.height > 90) {
-        var src = img.currentSrc || img.src;
-        if (src && !src.startsWith('data:') && visiblePhotos.indexOf(src) === -1) {
-          visiblePhotos.push(src);
-        }
-      }
-    });
-
-    var bodyText = visibleText.join('\\n');
-    var fullContent = bodyText + (visiblePhotos.length > 0 ? '\\n\\nAttached Photos (' + visiblePhotos.length + '):\\n' + visiblePhotos.join('\\n') : '');
-
-    return {
-      author: 'LinkedIn Post',
-      headline: '',
-      text: bodyText,
-      photos: visiblePhotos,
-      fullContent: fullContent,
-      postId: 'visible_viewport_' + Date.now()
-    };
-  }
-
-  // 8. Extract Full Content from the Visible Post
+  // 7. Extract Clean Single Post Content (Zero Noise)
   window.__JOBMAIL_EXTRACT_VISIBLE_POST = function() {
     var postEl = getVisibleFeedPost();
     var extractedData = null;
@@ -369,7 +353,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         try { postEl.classList.remove('jobmail-post-captured'); } catch(e) {}
       }, 1500);
 
-      // Expand all 'see more' buttons
+      // Expand all 'see more' buttons strictly inside this post
       try {
         var buttons = postEl.querySelectorAll('button, [role="button"], span');
         buttons.forEach(function(b) {
@@ -380,18 +364,8 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         });
       } catch(e) {}
 
+      // Extract Author Name
       var author = '';
-      var headline = '';
-      var contextHeader = '';
-
-      var headerEl = postEl.querySelector('[class*="header"], [class*="context"]');
-      if (headerEl) {
-        var hText = (headerEl.innerText || '').trim();
-        if (hText.toLowerCase().includes('like') || hText.toLowerCase().includes('comment') || hText.toLowerCase().includes('repost')) {
-          contextHeader = hText;
-        }
-      }
-
       var authorEl = postEl.querySelector(
         '.update-components-actor__name, [class*="actor__name"], [class*="actor__title"], h3, h2, a[href*="/in/"]'
       );
@@ -399,6 +373,8 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         author = (authorEl.innerText || authorEl.textContent || '').trim();
       }
 
+      // Extract Headline / Subtitle
+      var headline = '';
       var headlineEl = postEl.querySelector(
         '.update-components-actor__description, [class*="actor__description"], [class*="actor__headline"], [class*="sub-description"]'
       );
@@ -406,33 +382,47 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         headline = (headlineEl.innerText || headlineEl.textContent || '').trim();
       }
 
+      // Extract Clean Body Text
       var postText = '';
       var textContainer = postEl.querySelector(
-        '.update-components-text, .feed-shared-update-v2__description-wrapper, [class*="update-components-text"], [class*="commentary"], [data-view-name="feed-update-text"]'
+        '.update-components-text, [class*="update-components-text"], .feed-shared-update-v2__description-wrapper, [class*="commentary"], [data-view-name="feed-update-text"]'
       );
       if (textContainer) {
         postText = (textContainer.innerText || textContainer.textContent || '').trim();
       }
 
-      if (!postText || postText.length < 20) {
+      // If text container not found, clone post and strip noise
+      if (!postText || postText.length < 15) {
         var clone = postEl.cloneNode(true);
-        var unwanted = clone.querySelectorAll(
-          'script, style, button, [class*="social"], [class*="action"], .jobmail-radio-container'
-        );
-        unwanted.forEach(function(u) { try { u.remove(); } catch(e) {} });
+        // Remove noise: buttons, social actions, reaction counts, radio buttons, etc.
+        var noiseSelectors = [
+          'script', 'style', 'button',
+          '[class*="social-counts"]', '[class*="social-details"]', '[class*="reactions"]',
+          '[class*="social-action"]', '[class*="social-bar"]', '[class*="feed-shared-social-action-bar"]',
+          '.jobmail-radio-container',
+          '.update-components-actor', '[class*="update-components-actor"]',
+          '[class*="control-menu"]'
+        ];
+        noiseSelectors.forEach(function(sel) {
+          var els = clone.querySelectorAll(sel);
+          els.forEach(function(el) { try { el.remove(); } catch(e) {} });
+        });
         postText = (clone.innerText || clone.textContent || '').trim();
       }
 
+      // Filter out any trailing reaction counts that leaked in
+      postText = postText.replace(/\\b\\d+\\s*(likes?|comments?|reposts?)\\b/gi, '').trim();
+
+      // Extract Photos
       var photoUrls = [];
       var images = postEl.querySelectorAll('img');
       images.forEach(function(img) {
+        if (img.closest && img.closest('[class*="actor"], [class*="avatar"], .feed-shared-actor')) return;
         var src = img.currentSrc || img.src || img.getAttribute('data-delayed-url');
         if (src && src.indexOf('data:image') === -1) {
           var width = img.naturalWidth || img.width || img.offsetWidth;
           var height = img.naturalHeight || img.height || img.offsetHeight;
-          var isContentImg = (width > 90 && height > 90) ||
-            (img.closest && img.closest('[class*="image"], [class*="media"], [class*="article"], [class*="carousel"]'));
-          if (isContentImg && photoUrls.indexOf(src) === -1) {
+          if (width > 80 && height > 80 && photoUrls.indexOf(src) === -1) {
             photoUrls.push(src);
           }
         }
@@ -441,9 +431,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       var postId = getPostId(postEl);
 
       var sections = [];
-      if (contextHeader) {
-        sections.push(contextHeader);
-      }
       if (author) {
         sections.push('Author: ' + author + (headline ? ' (' + headline + ')' : ''));
       }
@@ -465,8 +452,27 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         postId: postId
       };
     } else {
-      // Direct viewport harvesting
-      extractedData = extractDirectFromViewport();
+      // Fallback: Find largest text container in center
+      var centerBlockText = '';
+      var pTags = document.querySelectorAll('p, div[class*="text"]');
+      pTags.forEach(function(p) {
+        var r = p.getBoundingClientRect();
+        if (r.top > 60 && r.bottom < (window.innerHeight || 640) - 60) {
+          var t = (p.innerText || '').trim();
+          if (t.length > centerBlockText.length && !t.includes('JobMail') && !t.includes('ChatGPT')) {
+            centerBlockText = t;
+          }
+        }
+      });
+
+      extractedData = {
+        author: 'LinkedIn Post',
+        headline: '',
+        text: centerBlockText,
+        photos: [],
+        fullContent: centerBlockText || 'LinkedIn post content',
+        postId: 'visible_post_' + Date.now()
+      };
     }
 
     sendLog('POST_EXTRACTED_SUCCESS', {
@@ -483,7 +489,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     }
   };
 
-  // 9. Radio Button Injection & Setup
+  // 8. Radio Button Injection & Setup
   function injectRadioButton(post) {
     var postId = getPostId(post);
     if (!post.classList) return false;

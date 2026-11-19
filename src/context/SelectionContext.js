@@ -45,7 +45,7 @@ export function SelectionProvider({ children }) {
     setCapturedContentState(content);
     setPendingPaste(true);
 
-    // Also copy to device system clipboard
+    // Also copy clean text to device system clipboard
     if (content && content.fullContent) {
       try {
         await Clipboard.setStringAsync(content.fullContent);

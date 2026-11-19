@@ -107,8 +107,8 @@ export default function BrowserHeader({
             <Ionicons name="arrow-forward-circle" size={16} color="#0a66c2" />
             <Text style={styles.selectionTextInactive} numberOfLines={1}>
               {detectedCount > 0
-                ? `${detectedCount} posts ready – Tap to Send Visible Post ➔`
-                : 'Tap to Send Visible Post to ChatGPT ➔'}
+                ? `${detectedCount} posts ready – 📸 Capture & Send to ChatGPT ➔`
+                : '📸 Capture Post & Send to ChatGPT ➔'}
             </Text>
           </TouchableOpacity>
         )}
