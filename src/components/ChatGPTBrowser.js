@@ -37,6 +37,7 @@ export default function ChatGPTBrowser() {
   const [loading, setLoading] = useState(true);
   const [attachStatus, setAttachStatus] = useState(false);
   const [previewModalVisible, setPreviewModalVisible] = useState(false);
+  const [pinnedTitle, setPinnedTitle] = useState('');
 
   // Hardware back button on Android
   useEffect(() => {
@@ -121,6 +122,8 @@ export default function ChatGPTBrowser() {
       const data = JSON.parse(event.nativeEvent.data);
       if (data && data.type === 'CHATGPT_ATTACH_SUCCESS') {
         setAttachStatus(true);
+      } else if (data && data.type === 'CHATGPT_FIRST_PINNED_FOUND') {
+        if (data.title) setPinnedTitle(data.title);
       }
     } catch (_e) {}
   }, []);
@@ -136,7 +139,9 @@ export default function ChatGPTBrowser() {
           <Text style={styles.brandTitle}>ChatGPT</Text>
           <View style={styles.pinnedBadge}>
             <Ionicons name="pin" size={10} color="#059669" />
-            <Text style={styles.pinnedText}>Pinned</Text>
+            <Text style={styles.pinnedText} numberOfLines={1}>
+              {pinnedTitle ? `Pinned: ${pinnedTitle}` : 'First Pinned Chat'}
+            </Text>
           </View>
         </View>
 
@@ -186,7 +191,9 @@ export default function ChatGPTBrowser() {
                 Screenshot Captured
               </Text>
               <Text style={styles.bannerStatus} numberOfLines={1}>
-                {attachStatus ? '✓ Single screenshot attached' : 'Ready for ChatGPT'}
+                {attachStatus
+                  ? '✓ Attached to First Pinned Chat'
+                  : (pinnedTitle ? `Target: Pinned "${pinnedTitle}"` : 'Posting to First Pinned Chat')}
               </Text>
             </View>
           </View>
