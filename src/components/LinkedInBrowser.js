@@ -35,12 +35,12 @@ export default function LinkedInBrowser() {
   const [errorMessage, setErrorMessage] = useState('');
   const [detectedCount, setDetectedCount] = useState(0);
 
-  // Register WebView ref with context
+  // Register WebView ref with context (re-register when the WebView remounts after an error)
   useEffect(() => {
     if (webViewRef.current) {
       registerWebView(webViewRef.current);
     }
-  }, [registerWebView]);
+  }, [registerWebView, hasError]);
 
   // Android hardware back button handling
   useEffect(() => {

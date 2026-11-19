@@ -260,6 +260,68 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return candidate;
   }
 
+  // 5b. Class-name-independent detection.
+  // LinkedIn (esp. the mobile site) uses hashed/changing class names, so we
+  // find each post's action bar (Like / Comment / Repost / Send buttons) by its
+  // label, then climb until the next level up would contain a different post.
+  var ACTION_RE = /^(react\\s+)?(like|comment|repost|send|share)\\b/i;
+
+  function actionButtonsIn(root) {
+    var out = [];
+    var nodes = root.querySelectorAll('button, [role="button"], a[role="button"]');
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var label = (n.getAttribute('aria-label') || n.innerText || n.textContent || '').trim();
+      if (label.length > 0 && label.length < 40 && ACTION_RE.test(label)) out.push(n);
+    }
+    return out;
+  }
+
+  function countLikeButtons(root) {
+    var c = 0;
+    var nodes = root.querySelectorAll('button, [role="button"]');
+    for (var i = 0; i < nodes.length; i++) {
+      var label = (nodes[i].getAttribute('aria-label') || nodes[i].innerText || '').trim();
+      if (label.length < 40 && /^(react\\s+)?like\\b/i.test(label)) c++;
+    }
+    return c;
+  }
+
+  function findPostsByActionBar() {
+    var found = [];
+    var buttons = actionButtonsIn(document);
+    var seenBars = [];
+    buttons.forEach(function(btn) {
+      var curr = btn;
+      var depth = 0;
+      // climb to the smallest ancestor that holds >= 2 distinct action buttons (the action bar)
+      while (curr.parentElement && depth < 8) {
+        if (actionButtonsIn(curr).length >= 2) break;
+        curr = curr.parentElement;
+        depth++;
+      }
+      if (actionButtonsIn(curr).length < 2) return;
+      if (seenBars.indexOf(curr) !== -1) return;
+      seenBars.push(curr);
+
+      // climb while the parent still contains only THIS post's Like button
+      var card = curr;
+      var guard = 0;
+      while (card.parentElement && guard < 25) {
+        var parent = card.parentElement;
+        var tag = parent.tagName.toLowerCase();
+        if (tag === 'body' || tag === 'html' || tag === 'main' || parent.getAttribute('role') === 'main') break;
+        if (countLikeButtons(parent) > 1) break;
+        if (parent.querySelector('[class*="share-box"], [data-view-name="feed-share-box"]')) break;
+        card = parent;
+        guard++;
+      }
+      // sanity: a post card has some height and is not tiny
+      if (card.offsetHeight >= 120 && found.indexOf(card) === -1) found.push(card);
+    });
+    return found;
+  }
+
   // 6. Find All Feed Post Cards
   function findFeedPosts() {
     var postsSet = [];
@@ -347,15 +409,22 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       addIfValid(cardFromMenu);
     }
 
+    // Strategy 6: label-based action-bar detection (works when class names change)
+    try {
+      findPostsByActionBar().forEach(function(el) {
+        if (postsSet.indexOf(el) === -1 && !el.querySelector('.jobmail-radio-container')) {
+          postsSet.push(el);
+        } else if (postsSet.indexOf(el) === -1) {
+          postsSet.push(el);
+        }
+      });
+    } catch (e) { sendLog('ACTIONBAR_ERROR', String(e)); }
+
     // Filter out wrappers if inner card is present
     var finalPosts = [];
     postsSet.forEach(function(el) {
       var isOuterWrapper = postsSet.some(function(other) {
-        return other !== el && el.contains(other) && (
-          el.classList.contains('occludable-update') ||
-          el.classList.contains('scaffold-finite-scroll__content') ||
-          el.getAttribute('role') === 'main'
-        );
+        return other !== el && el.contains(other);
       });
       if (!isOuterWrapper) {
         finalPosts.push(el);
@@ -542,6 +611,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         feedRootCount: document.querySelectorAll('.scaffold-finite-scroll__content, [data-view-name="scaffold-finite-scroll__content"]').length,
         explicitFeedCardCount: document.querySelectorAll('[data-view-name="feed-full-update"], [data-view-name*="feed"][data-view-name*="update"], .feed-shared-update-v2, article[data-activity-id]').length,
         actorMarkerCount: document.querySelectorAll('.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="actor"]').length,
+        actionButtons: actionButtonsIn(document).length,
         selectedPostId: state.selectedPostId,
         url: window.location.href
       });
