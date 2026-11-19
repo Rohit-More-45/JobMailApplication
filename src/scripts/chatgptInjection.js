@@ -1,8 +1,8 @@
 /**
- * JobMail - ChatGPT Injected Automation Script (v2)
+ * JobMail - ChatGPT Injected Automation Script (v3)
  *
- * Automatically locates the ChatGPT prompt input area and pastes the clean
- * LinkedIn post content and attaches the screenshot directly into the conversation.
+ * Automatically attaches ONLY the captured screenshot into ChatGPT chat.
+ * No extra text content is pasted.
  */
 
 export const CHATGPT_INJECTION_SCRIPT = `
@@ -20,7 +20,7 @@ export const CHATGPT_INJECTION_SCRIPT = `
     );
   }
 
-  // Helper to create an image File from base64
+  // Convert base64 data to an image File
   function base64ToFile(base64Data, filename) {
     try {
       var cleanBase64 = base64Data.replace(/^data:image\\/\\w+;base64,/, '');
@@ -31,108 +31,90 @@ export const CHATGPT_INJECTION_SCRIPT = `
       }
       var byteArray = new Uint8Array(byteNumbers);
       var blob = new Blob([byteArray], { type: 'image/png' });
-      return new File([blob], filename || 'linkedin-post.png', { type: 'image/png' });
+      return new File([blob], filename || 'post-screenshot.png', { type: 'image/png' });
     } catch (e) {
       console.warn('[JobMail:ChatGPT] base64ToFile error:', e);
       return null;
     }
   }
 
-  // Attempt to attach screenshot file to ChatGPT file input or paste event
+  // Attach screenshot to ChatGPT (via File Input and Clipboard Paste event)
   function attachScreenshot(base64Image) {
     if (!base64Image) return false;
     try {
-      var file = base64ToFile(base64Image, 'linkedin-post-screenshot.png');
+      var file = base64ToFile(base64Image, 'post-screenshot.png');
       if (!file) return false;
 
-      // 1. Try file input attachment
-      var fileInput = document.querySelector('input[type="file"]');
-      if (fileInput) {
-        var dt = new DataTransfer();
-        dt.items.add(file);
-        fileInput.files = dt.files;
-        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      var attached = false;
+
+      // 1. Try ChatGPT file input element
+      var fileInputs = document.querySelectorAll('input[type="file"]');
+      for (var i = 0; i < fileInputs.length; i++) {
+        try {
+          var input = fileInputs[i];
+          var dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          attached = true;
+          break;
+        } catch (e) {}
       }
 
-      // 2. Try dispatching paste event on chat input with file in clipboardData
-      var inputEl = findChatInput();
-      if (inputEl) {
-        var pasteDt = new DataTransfer();
-        pasteDt.items.add(file);
-        var pasteEvent = new ClipboardEvent('paste', {
-          bubbles: true,
-          cancelable: true,
-          clipboardData: pasteDt
-        });
-        inputEl.dispatchEvent(pasteEvent);
+      // 2. Try dispatching paste event on chat prompt input with file in clipboardData
+      var promptEl = findChatInput();
+      if (promptEl) {
+        try {
+          promptEl.focus();
+          var pasteDt = new DataTransfer();
+          pasteDt.items.add(file);
+          var pasteEvent = new ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: pasteDt
+          });
+          promptEl.dispatchEvent(pasteEvent);
+          attached = true;
+        } catch (e) {}
       }
-      return true;
+
+      return attached;
     } catch (e) {
       console.warn('[JobMail:ChatGPT] attachScreenshot error:', e);
       return false;
     }
   }
 
-  window.__JOBMAIL_PASTE_INTO_CHATGPT = function(textToPaste, base64Image) {
-    if (!textToPaste && !base64Image) return false;
+  // Only send screenshot - no extra text
+  window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY = function(base64Image) {
+    if (!base64Image) return false;
 
     var attempts = 0;
-    var maxAttempts = 30;
+    var maxAttempts = 25;
 
-    function tryPaste() {
+    function tryAttach() {
       attempts++;
-      var inputEl = findChatInput();
+      var success = attachScreenshot(base64Image);
 
-      if (inputEl) {
-        inputEl.focus();
-
-        // Attach image if available
-        if (base64Image) {
-          attachScreenshot(base64Image);
-        }
-
-        // Insert text content
-        if (textToPaste) {
-          if (inputEl.tagName.toLowerCase() === 'textarea') {
-            inputEl.value = textToPaste;
-            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-            inputEl.dispatchEvent(new Event('change', { bubbles: true }));
-            if (inputEl.style) {
-              inputEl.style.height = 'auto';
-              inputEl.style.height = Math.min(inputEl.scrollHeight, 220) + 'px';
-            }
-          } else if (inputEl.isContentEditable || inputEl.getAttribute('contenteditable') === 'true') {
-            inputEl.innerHTML = '';
-            var paragraphs = textToPaste.split('\\n');
-            paragraphs.forEach(function(pText) {
-              var p = document.createElement('p');
-              p.textContent = pText || '\\u00A0';
-              inputEl.appendChild(p);
-            });
-            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-        }
-
+      if (success) {
         try {
           if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
             window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'CHATGPT_PASTE_SUCCESS',
-              length: textToPaste ? textToPaste.length : 0,
-              hasImage: !!base64Image
+              type: 'CHATGPT_ATTACH_SUCCESS'
             }));
           }
         } catch (e) {}
-
         return true;
       }
 
       if (attempts < maxAttempts) {
-        setTimeout(tryPaste, 250);
+        setTimeout(tryAttach, 300);
       } else {
         try {
           if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
             window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'CHATGPT_PASTE_RETRY_EXHAUSTED'
+              type: 'CHATGPT_ATTACH_RETRY_EXHAUSTED'
             }));
           }
         } catch (e) {}
@@ -140,7 +122,7 @@ export const CHATGPT_INJECTION_SCRIPT = `
       return false;
     }
 
-    return tryPaste();
+    return tryAttach();
   };
 })();
 true;

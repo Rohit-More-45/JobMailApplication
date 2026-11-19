@@ -29,10 +29,8 @@ const CUSTOM_USER_AGENT = Platform.select({
 export default function LinkedInBrowser() {
   const webViewRef = useRef(null);
   const viewShotRef = useRef(null);
-  const pendingScreenshotRef = useRef(null);
-  const fallbackTimerRef = useRef(null);
 
-  const { setSelectedPostId, isSelected, registerWebView, setCapturedContent } = useSelection();
+  const { setSelectedPostId, registerWebView, setCapturedContent } = useSelection();
 
   const [canGoBack, setCanGoBack] = useState(false);
   const [currentUrl, setCurrentUrl] = useState(LINKEDIN_FEED_URL);
@@ -41,8 +39,12 @@ export default function LinkedInBrowser() {
   const [errorMessage, setErrorMessage] = useState('');
   const [detectedCount, setDetectedCount] = useState(0);
 
-  // Minimize / Maximize toggle state (- and +)
+  // Zoom control state (1.0 = 100%, 0.8 = 80%, etc.)
+  const [zoomLevel, setZoomLevel] = useState(1.0);
+
+  // Minimize / Maximize floating panel state
   const [isMinimized, setIsMinimized] = useState(false);
+
   // Capturing state to temporarily hide overlays during screenshot
   const [isCapturing, setIsCapturing] = useState(false);
 
@@ -52,15 +54,6 @@ export default function LinkedInBrowser() {
       registerWebView(webViewRef.current);
     }
   }, [registerWebView]);
-
-  // Clean up fallback timer on unmount
-  useEffect(() => {
-    return () => {
-      if (fallbackTimerRef.current) {
-        clearTimeout(fallbackTimerRef.current);
-      }
-    };
-  }, []);
 
   // Android hardware back button handling
   useEffect(() => {
@@ -81,63 +74,54 @@ export default function LinkedInBrowser() {
     return () => subscription.remove();
   }, [canGoBack]);
 
-  // Handle messages from injected JavaScript
-  const handleMessage = useCallback(
-    (event) => {
-      try {
-        const data = JSON.parse(event.nativeEvent.data);
-        if (!data) return;
-
-        if (data.type === 'SELECTION_CHANGED') {
-          setSelectedPostId(data.postId || null);
-        } else if (data.type === 'POST_EXTRACTED' && data.data) {
-          if (fallbackTimerRef.current) {
-            clearTimeout(fallbackTimerRef.current);
-            fallbackTimerRef.current = null;
-          }
-
-          // Combine with captured screenshot
-          const screenshotData = pendingScreenshotRef.current || {};
-          const combinedContent = {
-            ...data.data,
-            screenshotUri: screenshotData.screenshotUri || null,
-            screenshotBase64: screenshotData.screenshotBase64 || null,
-          };
-
-          // Store in context and clipboard
-          setCapturedContent(combinedContent);
-          setIsCapturing(false);
-
-          // Navigate to ChatGPT tab
-          router.push('/(tabs)/chatgpt');
-        } else if (data.type === 'DEBUG_LOG') {
-          console.log(
-            `[JobMail Debug] ${data.subType}:`,
-            JSON.stringify(data.details)
-          );
-          if (data.subType === 'POSTS_SCANNED' && data.details) {
-            setDetectedCount(data.details.postsDetected || 0);
-          }
+  // Apply zoom to WebView
+  const applyZoom = useCallback((zoom) => {
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        if (typeof window.__JOBMAIL_SET_ZOOM === 'function') {
+          window.__JOBMAIL_SET_ZOOM(${zoom});
+        } else {
+          try {
+            document.documentElement.style.zoom = ${zoom};
+            document.body.style.zoom = ${zoom};
+          } catch(e) {}
         }
-      } catch (_err) {
-        // Not a JSON message or unexpected format
-      }
-    },
-    [setSelectedPostId, setCapturedContent]
-  );
+        true;
+      `);
+    }
+  }, []);
 
-  // Capture Screenshot & Extract Post & Send to ChatGPT
+  // Zoom In (+)
+  const handleZoomIn = useCallback(() => {
+    const nextZoom = Math.min(1.8, Math.round((zoomLevel + 0.1) * 10) / 10);
+    setZoomLevel(nextZoom);
+    applyZoom(nextZoom);
+  }, [zoomLevel, applyZoom]);
+
+  // Zoom Out (-)
+  const handleZoomOut = useCallback(() => {
+    const nextZoom = Math.max(0.4, Math.round((zoomLevel - 0.1) * 10) / 10);
+    setZoomLevel(nextZoom);
+    applyZoom(nextZoom);
+  }, [zoomLevel, applyZoom]);
+
+  // Reset Zoom to 100%
+  const handleResetZoom = useCallback(() => {
+    setZoomLevel(1.0);
+    applyZoom(1.0);
+  }, [applyZoom]);
+
+  // Capture Screenshot & Send ONLY Screenshot to ChatGPT (No extra text)
   const handleCaptureAndSend = useCallback(async () => {
     try {
       setIsCapturing(true);
 
-      // Brief delay to allow overlays to hide before snapshotting
+      // Brief delay to hide overlay controls before taking snapshot
       await new Promise((resolve) => setTimeout(resolve, 80));
 
       let screenshotUri = null;
       let screenshotBase64 = null;
 
-      // 1. Take screenshot of visible WebView
       if (viewShotRef.current) {
         try {
           const dataUri = await captureRef(viewShotRef.current, {
@@ -154,77 +138,75 @@ export default function LinkedInBrowser() {
         }
       }
 
-      pendingScreenshotRef.current = { screenshotUri, screenshotBase64 };
+      setIsCapturing(false);
 
-      // 2. Trigger clean post content extraction in WebView
-      if (webViewRef.current) {
-        webViewRef.current.injectJavaScript(`
-          if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
-            window.__JOBMAIL_EXTRACT_VISIBLE_POST();
-          } else {
-            ${LINKEDIN_INJECTION_SCRIPT}
-            if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
-              window.__JOBMAIL_EXTRACT_VISIBLE_POST();
-            }
-          }
-          true;
-        `);
-      }
-
-      // 3. Fallback safety timer: if no POST_EXTRACTED message within 1.5s, proceed with screenshot
-      fallbackTimerRef.current = setTimeout(() => {
-        setIsCapturing(false);
-        const fallbackContent = {
-          author: 'LinkedIn Post',
-          headline: '',
-          text: 'Captured LinkedIn Post Screenshot',
-          photos: [],
-          fullContent: 'Captured LinkedIn Post Screenshot',
+      if (screenshotUri && screenshotBase64) {
+        // Only screenshot is sent - no extra text
+        setCapturedContent({
           screenshotUri: screenshotUri,
           screenshotBase64: screenshotBase64,
           postId: 'screenshot_' + Date.now(),
-        };
-        setCapturedContent(fallbackContent);
+        });
+
+        // Navigate immediately to ChatGPT tab
         router.push('/(tabs)/chatgpt');
-      }, 1500);
+      }
     } catch (e) {
       console.warn('[LinkedInBrowser] handleCaptureAndSend error:', e);
       setIsCapturing(false);
     }
   }, [setCapturedContent]);
 
-  const handleNavigationStateChange = useCallback((navState) => {
-    setCanGoBack(navState.canGoBack);
-    setCurrentUrl(navState.url);
-    setLoading(navState.loading);
-
-    if (!navState.loading && webViewRef.current) {
+  // Handle messages from injected JavaScript
+  const handleMessage = useCallback(
+    (event) => {
       try {
-        webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
-        webViewRef.current.injectJavaScript(`
-          if (window.__JOBMAIL_TRIGGER_SCAN) {
-            window.__JOBMAIL_TRIGGER_SCAN('navigationStateChange');
+        const data = JSON.parse(event.nativeEvent.data);
+        if (!data) return;
+
+        if (data.type === 'SELECTION_CHANGED') {
+          setSelectedPostId(data.postId || null);
+        } else if (data.type === 'DEBUG_LOG') {
+          if (data.subType === 'POSTS_SCANNED' && data.details) {
+            setDetectedCount(data.details.postsDetected || 0);
           }
-          true;
-        `);
-      } catch (_e) {}
-    }
-  }, []);
+        }
+      } catch (_err) {
+        // Not a JSON message or unexpected format
+      }
+    },
+    [setSelectedPostId]
+  );
+
+  const handleNavigationStateChange = useCallback(
+    (navState) => {
+      setCanGoBack(navState.canGoBack);
+      setCurrentUrl(navState.url);
+      setLoading(navState.loading);
+
+      if (!navState.loading && webViewRef.current) {
+        try {
+          webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
+          if (zoomLevel !== 1.0) {
+            applyZoom(zoomLevel);
+          }
+        } catch (_e) {}
+      }
+    },
+    [zoomLevel, applyZoom]
+  );
 
   const handleLoadEnd = useCallback(() => {
     setLoading(false);
     if (webViewRef.current) {
       try {
         webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
-        webViewRef.current.injectJavaScript(`
-          if (window.__JOBMAIL_TRIGGER_SCAN) {
-            window.__JOBMAIL_TRIGGER_SCAN('onLoadEnd');
-          }
-          true;
-        `);
+        if (zoomLevel !== 1.0) {
+          applyZoom(zoomLevel);
+        }
       } catch (_e) {}
     }
-  }, []);
+  }, [zoomLevel, applyZoom]);
 
   const handleReload = useCallback(() => {
     setHasError(false);
@@ -254,6 +236,8 @@ export default function LinkedInBrowser() {
     setHasError(true);
     setErrorMessage(nativeEvent.description || 'Could not load LinkedIn.');
   }, []);
+
+  const zoomPercent = Math.round(zoomLevel * 100);
 
   return (
     <View style={styles.container}>
@@ -322,55 +306,89 @@ export default function LinkedInBrowser() {
           </ViewShot>
         )}
 
-        {/* Floating Capture Overlay with Minimize (-) and Maximize (+) */}
+        {/* Floating Zoom & Screenshot Controls */}
         {!isCapturing && (
           isMinimized ? (
-            /* Minimized State: Sleek compact FAB with + toggle and camera button */
+            /* Minimized View: Small corner toggle to maximize */
             <View style={styles.minimizedContainer}>
               <TouchableOpacity
                 style={styles.minimizedExpandBtn}
                 onPress={() => setIsMinimized(false)}
-                accessibilityLabel="Maximize Controls (+)"
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Show Zoom & Capture Controls"
+                activeOpacity={0.85}
               >
-                <Ionicons name="add" size={22} color="#ffffff" />
+                <Ionicons name="expand" size={16} color="#ffffff" />
+                <Text style={styles.minimizedText}>{zoomPercent}%</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.minimizedCaptureBtn}
+                style={styles.minimizedCameraBtn}
                 onPress={handleCaptureAndSend}
-                accessibilityLabel="Capture Post & Screenshot"
+                accessibilityLabel="Capture Screenshot"
                 activeOpacity={0.85}
               >
                 <Ionicons name="camera" size={20} color="#ffffff" />
               </TouchableOpacity>
             </View>
           ) : (
-            /* Maximized State: Floating action bar with - minimize button */
-            <View style={styles.maximizedContainer}>
-              {/* Minus (-) Minimize Button */}
-              <TouchableOpacity
-                style={styles.minimizeBtn}
-                onPress={() => setIsMinimized(true)}
-                accessibilityLabel="Minimize Controls (-)"
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="remove" size={20} color="#ffffff" />
-              </TouchableOpacity>
+            /* Maximized Floating Toolbar: Screen Zoom In/Out + Screenshot Capture */
+            <View style={styles.floatingPanel}>
+              {/* Zoom Controls Row */}
+              <View style={styles.zoomRow}>
+                <View style={styles.zoomControlsGroup}>
+                  {/* Zoom Out Button (-) */}
+                  <TouchableOpacity
+                    style={styles.zoomBtn}
+                    onPress={handleZoomOut}
+                    accessibilityLabel="Zoom Out (-)"
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Ionicons name="remove" size={18} color="#ffffff" />
+                  </TouchableOpacity>
 
-              {/* Main Action Button */}
+                  {/* Zoom Percentage (Tap to Reset to 100%) */}
+                  <TouchableOpacity
+                    style={styles.zoomBadge}
+                    onPress={handleResetZoom}
+                    accessibilityLabel="Reset Zoom to 100%"
+                  >
+                    <Ionicons name="search" size={12} color="#94a3b8" />
+                    <Text style={styles.zoomBadgeText}>{zoomPercent}%</Text>
+                  </TouchableOpacity>
+
+                  {/* Zoom In Button (+) */}
+                  <TouchableOpacity
+                    style={styles.zoomBtn}
+                    onPress={handleZoomIn}
+                    accessibilityLabel="Zoom In (+)"
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Ionicons name="add" size={18} color="#ffffff" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Minimize Button */}
+                <TouchableOpacity
+                  style={styles.panelMinimizeBtn}
+                  onPress={() => setIsMinimized(true)}
+                  accessibilityLabel="Minimize Panel"
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Ionicons name="chevron-down" size={18} color="#94a3b8" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Main Screenshot Button */}
               <TouchableOpacity
-                style={styles.floatingButton}
+                style={styles.captureButton}
                 onPress={handleCaptureAndSend}
                 activeOpacity={0.88}
               >
-                <View style={styles.fabIconBadge}>
+                <View style={styles.cameraIconBadge}>
                   <Ionicons name="camera" size={16} color="#ffffff" />
                 </View>
-                <Text style={styles.floatingButtonText} numberOfLines={1}>
-                  {isSelected
-                    ? '📸 Capture Selected Post & Send ➔'
-                    : '📸 Capture Post & Send to ChatGPT ➔'}
+                <Text style={styles.captureButtonText} numberOfLines={1}>
+                  📸 Send Screenshot to ChatGPT ➔
                 </Text>
               </TouchableOpacity>
             </View>
@@ -443,23 +461,119 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Maximized Container with (-) and Main Button
-  maximizedContainer: {
+  // Floating Panel for Zoom & Screenshot
+  floatingPanel: {
+    position: 'absolute',
+    bottom: 14,
+    left: 12,
+    right: 12,
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    borderRadius: 16,
+    padding: 10,
+    gap: 8,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  zoomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
+  zoomControlsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(30, 41, 59, 0.8)',
+    borderRadius: 20,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  zoomBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#334155',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  zoomBadgeText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  panelMinimizeBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(30, 41, 59, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  captureButton: {
+    height: 46,
+    backgroundColor: '#0a66c2',
+    borderRadius: 23,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    elevation: 4,
+    shadowColor: '#0a66c2',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+  },
+  cameraIconBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#10a37f',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  captureButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+
+  // Minimized state
+  minimizedContainer: {
     position: 'absolute',
     bottom: 18,
-    left: 14,
     right: 14,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  minimizeBtn: {
-    width: 44,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#1e293b',
+  minimizedExpandBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    height: 40,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#1e293b',
+    gap: 6,
     elevation: 6,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
@@ -468,75 +582,23 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255, 255, 255, 0.25)',
   },
-  floatingButton: {
-    flex: 1,
-    height: 48,
-    backgroundColor: '#0a66c2',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    shadowColor: '#0a66c2',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 6,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.4)',
-  },
-  fabIconBadge: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#10a37f',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  floatingButtonText: {
+  minimizedText: {
     color: '#ffffff',
-    fontSize: 13.5,
+    fontSize: 12,
     fontWeight: '700',
-    letterSpacing: -0.2,
   },
-
-  // Minimized Container with (+) and Quick Camera
-  minimizedContainer: {
-    position: 'absolute',
-    bottom: 20,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  minimizedExpandBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#1e293b',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  minimizedCaptureBtn: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+  minimizedCameraBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: '#0a66c2',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 7,
+    elevation: 6,
     shadowColor: '#0a66c2',
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.4,
-    shadowRadius: 8,
+    shadowRadius: 6,
     borderWidth: 2,
     borderColor: '#ffffff',
   },

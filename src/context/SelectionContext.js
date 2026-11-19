@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useRef, useCallback } from 'react';
-import * as Clipboard from 'expo-clipboard';
 
 const SelectionContext = createContext({
   selectedPostId: null,
@@ -41,18 +40,9 @@ export function SelectionProvider({ children }) {
     }
   }, []);
 
-  const setCapturedContent = useCallback(async (content) => {
+  const setCapturedContent = useCallback((content) => {
     setCapturedContentState(content);
     setPendingPaste(true);
-
-    // Also copy clean text to device system clipboard
-    if (content && content.fullContent) {
-      try {
-        await Clipboard.setStringAsync(content.fullContent);
-      } catch (e) {
-        console.warn('[SelectionContext] Clipboard copy error:', e);
-      }
-    }
   }, []);
 
   const clearCapturedContent = useCallback(() => {

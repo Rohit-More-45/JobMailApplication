@@ -22,6 +22,38 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   var state = window.__JOBMAIL_STATE__;
 
+  // Zoom Helper Function for Screen Zoom In / Zoom Out
+  window.__JOBMAIL_SET_ZOOM = function(scale) {
+    try {
+      var s = parseFloat(scale) || 1.0;
+      if (document.documentElement) {
+        document.documentElement.style.zoom = s;
+      }
+      if (document.body) {
+        document.body.style.zoom = s;
+      }
+      var meta = document.querySelector('meta[name="viewport"]');
+      if (meta) {
+        meta.content = 'width=device-width, initial-scale=' + s + ', minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes';
+      }
+      return s;
+    } catch(e) {
+      return 1.0;
+    }
+  };
+
+  function enableUserScalable() {
+    try {
+      var meta = document.querySelector('meta[name="viewport"]');
+      if (!meta) {
+        meta = document.createElement('meta');
+        meta.name = 'viewport';
+        (document.head || document.documentElement).appendChild(meta);
+      }
+      meta.content = 'width=device-width, initial-scale=1.0, minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes';
+    } catch(e) {}
+  }
+
   // 1. Logging Helper
   function sendLog(type, details) {
     try {
@@ -590,6 +622,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
   };
 
   function setupEngine() {
+    enableUserScalable();
     injectStyles();
     scanAndInjectPosts('setup');
 

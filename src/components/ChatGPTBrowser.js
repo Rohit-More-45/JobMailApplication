@@ -33,7 +33,7 @@ export default function ChatGPTBrowser() {
 
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [pastedStatus, setPastedStatus] = useState(false);
+  const [attachStatus, setAttachStatus] = useState(false);
   const [previewModalVisible, setPreviewModalVisible] = useState(false);
 
   // Hardware back button on Android
@@ -56,58 +56,55 @@ export default function ChatGPTBrowser() {
     return () => sub.remove();
   }, [canGoBack, previewModalVisible]);
 
-  // Execute paste into ChatGPT (injects both clean post text and screenshot)
-  const triggerPaste = useCallback(() => {
-    if (!capturedContent || !webViewRef.current) return;
+  // Execute attaching ONLY the screenshot into ChatGPT
+  const triggerAttach = useCallback(() => {
+    if (!capturedContent || !capturedContent.screenshotBase64 || !webViewRef.current) return;
 
-    const textContent = capturedContent.fullContent || '';
-    const base64Img = capturedContent.screenshotBase64 || '';
-
-    const escapedText = JSON.stringify(textContent);
+    const base64Img = capturedContent.screenshotBase64;
     const escapedBase64 = JSON.stringify(base64Img);
 
     webViewRef.current.injectJavaScript(`
-      if (window.__JOBMAIL_PASTE_INTO_CHATGPT) {
-        window.__JOBMAIL_PASTE_INTO_CHATGPT(${escapedText}, ${escapedBase64});
+      if (window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY) {
+        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64});
       } else {
         ${CHATGPT_INJECTION_SCRIPT}
-        window.__JOBMAIL_PASTE_INTO_CHATGPT(${escapedText}, ${escapedBase64});
+        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64});
       }
       true;
     `);
 
-    setPastedStatus(true);
+    setAttachStatus(true);
     markPasteDone();
-    setTimeout(() => setPastedStatus(false), 4000);
+    setTimeout(() => setAttachStatus(false), 4000);
   }, [capturedContent, markPasteDone]);
 
-  // Automatically trigger paste if pendingPaste is true
+  // Automatically trigger screenshot attach if pendingPaste is true
   useEffect(() => {
-    if (pendingPaste && capturedContent && !loading) {
+    if (pendingPaste && capturedContent && capturedContent.screenshotBase64 && !loading) {
       const timer = setTimeout(() => {
-        triggerPaste();
+        triggerAttach();
       }, 700);
       return () => clearTimeout(timer);
     }
-  }, [pendingPaste, capturedContent, loading, triggerPaste]);
+  }, [pendingPaste, capturedContent, loading, triggerAttach]);
 
   const handleLoadEnd = useCallback(() => {
     setLoading(false);
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(CHATGPT_INJECTION_SCRIPT);
-      if (pendingPaste && capturedContent) {
+      if (pendingPaste && capturedContent && capturedContent.screenshotBase64) {
         setTimeout(() => {
-          triggerPaste();
+          triggerAttach();
         }, 900);
       }
     }
-  }, [pendingPaste, capturedContent, triggerPaste]);
+  }, [pendingPaste, capturedContent, triggerAttach]);
 
   const handleMessage = useCallback((event) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
-      if (data && data.type === 'CHATGPT_PASTE_SUCCESS') {
-        setPastedStatus(true);
+      if (data && data.type === 'CHATGPT_ATTACH_SUCCESS') {
+        setAttachStatus(true);
       }
     } catch (_e) {}
   }, []);
@@ -148,55 +145,43 @@ export default function ChatGPTBrowser() {
         </View>
       </View>
 
-      {/* Extracted Content & Screenshot Banner */}
-      {capturedContent && (
+      {/* Captured Screenshot Preview Banner */}
+      {capturedContent && capturedContent.screenshotUri && (
         <View style={styles.bannerContainer}>
           <View style={styles.bannerLeft}>
             {/* Screenshot Thumbnail */}
-            {capturedContent.screenshotUri ? (
-              <TouchableOpacity
-                onPress={() => setPreviewModalVisible(true)}
-                activeOpacity={0.8}
-                style={styles.thumbnailWrapper}
-              >
-                <Image
-                  source={{ uri: capturedContent.screenshotUri }}
-                  style={styles.thumbnail}
-                  resizeMode="cover"
-                />
-                <View style={styles.zoomBadge}>
-                  <Ionicons name="expand" size={10} color="#ffffff" />
-                </View>
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.iconThumb}>
-                <Ionicons
-                  name={pastedStatus ? 'checkmark-circle' : 'camera'}
-                  size={20}
-                  color={pastedStatus ? '#059669' : '#0a66c2'}
-                />
+            <TouchableOpacity
+              onPress={() => setPreviewModalVisible(true)}
+              activeOpacity={0.8}
+              style={styles.thumbnailWrapper}
+            >
+              <Image
+                source={{ uri: capturedContent.screenshotUri }}
+                style={styles.thumbnail}
+                resizeMode="cover"
+              />
+              <View style={styles.zoomBadge}>
+                <Ionicons name="expand" size={10} color="#ffffff" />
               </View>
-            )}
+            </TouchableOpacity>
 
             <View style={styles.bannerInfo}>
               <Text style={styles.bannerTitle} numberOfLines={1}>
-                {capturedContent.author && capturedContent.author !== 'LinkedIn Post'
-                  ? capturedContent.author
-                  : 'Captured Post & Screenshot'}
+                Screenshot Captured
               </Text>
               <Text style={styles.bannerStatus} numberOfLines={1}>
-                {pastedStatus ? '✓ Pasted into ChatGPT!' : 'Ready to paste'}
+                {attachStatus ? '✓ Screenshot attached to chat!' : 'Ready for ChatGPT'}
               </Text>
             </View>
           </View>
 
           <View style={styles.bannerButtons}>
             <TouchableOpacity
-              style={[styles.bannerActionBtn, styles.pasteBtn]}
-              onPress={triggerPaste}
+              style={[styles.bannerActionBtn, styles.attachBtn]}
+              onPress={triggerAttach}
             >
-              <Ionicons name="arrow-down-circle" size={14} color="#ffffff" />
-              <Text style={styles.pasteBtnText}>Paste</Text>
+              <Ionicons name="attach" size={15} color="#ffffff" />
+              <Text style={styles.attachBtnText}>Attach</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -236,14 +221,14 @@ export default function ChatGPTBrowser() {
               />
 
               <TouchableOpacity
-                style={styles.modalPasteBtn}
+                style={styles.modalAttachBtn}
                 onPress={() => {
                   setPreviewModalVisible(false);
-                  triggerPaste();
+                  triggerAttach();
                 }}
               >
-                <Ionicons name="arrow-down-circle" size={18} color="#ffffff" />
-                <Text style={styles.modalPasteBtnText}>Paste Post & Screenshot to ChatGPT</Text>
+                <Ionicons name="attach" size={18} color="#ffffff" />
+                <Text style={styles.modalAttachBtnText}>Attach Screenshot to ChatGPT</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -366,13 +351,14 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   thumbnailWrapper: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: 6,
     overflow: 'hidden',
     borderWidth: 1.5,
     borderColor: '#10a37f',
     position: 'relative',
+    backgroundColor: '#1e293b',
   },
   thumbnail: {
     width: '100%',
@@ -382,17 +368,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     right: 0,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
     padding: 2,
     borderTopLeftRadius: 4,
-  },
-  iconThumb: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#e0f2fe',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   bannerInfo: {
     flex: 1,
@@ -421,10 +399,10 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     gap: 4,
   },
-  pasteBtn: {
+  attachBtn: {
     backgroundColor: '#10a37f',
   },
-  pasteBtnText: {
+  attachBtnText: {
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '700',
@@ -498,7 +476,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#1e293b',
   },
-  modalPasteBtn: {
+  modalAttachBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -508,7 +486,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 8,
   },
-  modalPasteBtnText: {
+  modalAttachBtnText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700',
