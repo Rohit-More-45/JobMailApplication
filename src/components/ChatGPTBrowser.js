@@ -29,12 +29,23 @@ const CHATGPT_USER_AGENT = Platform.select({
 export default function ChatGPTBrowser() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
+  const hasAttachedRef = useRef(false);
+  const currentPostIdRef = useRef(null);
+
   const { capturedContent, clearCapturedContent, pendingPaste, markPasteDone } = useSelection();
 
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [attachStatus, setAttachStatus] = useState(false);
   const [previewModalVisible, setPreviewModalVisible] = useState(false);
+
+  // Reset attachment flag when a new screenshot is captured
+  useEffect(() => {
+    if (capturedContent && capturedContent.postId !== currentPostIdRef.current) {
+      currentPostIdRef.current = capturedContent.postId;
+      hasAttachedRef.current = false;
+    }
+  }, [capturedContent]);
 
   // Hardware back button on Android
   useEffect(() => {
@@ -56,34 +67,40 @@ export default function ChatGPTBrowser() {
     return () => sub.remove();
   }, [canGoBack, previewModalVisible]);
 
-  // Execute attaching ONLY the screenshot into ChatGPT
-  const triggerAttach = useCallback(() => {
+  // Execute attaching EXACTLY ONE screenshot into ChatGPT
+  const triggerAttach = useCallback((force = false) => {
     if (!capturedContent || !capturedContent.screenshotBase64 || !webViewRef.current) return;
+
+    if (!force && hasAttachedRef.current) {
+      return; // Already attached, prevent duplicates
+    }
+
+    hasAttachedRef.current = true;
+    markPasteDone();
 
     const base64Img = capturedContent.screenshotBase64;
     const escapedBase64 = JSON.stringify(base64Img);
 
     webViewRef.current.injectJavaScript(`
       if (window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY) {
-        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64});
+        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${force ? 'true' : 'false'});
       } else {
         ${CHATGPT_INJECTION_SCRIPT}
-        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64});
+        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${force ? 'true' : 'false'});
       }
       true;
     `);
 
     setAttachStatus(true);
-    markPasteDone();
     setTimeout(() => setAttachStatus(false), 4000);
   }, [capturedContent, markPasteDone]);
 
-  // Automatically trigger screenshot attach if pendingPaste is true
+  // Automatically trigger screenshot attach once when ready
   useEffect(() => {
-    if (pendingPaste && capturedContent && capturedContent.screenshotBase64 && !loading) {
+    if (pendingPaste && capturedContent && capturedContent.screenshotBase64 && !loading && !hasAttachedRef.current) {
       const timer = setTimeout(() => {
-        triggerAttach();
-      }, 700);
+        triggerAttach(false);
+      }, 800);
       return () => clearTimeout(timer);
     }
   }, [pendingPaste, capturedContent, loading, triggerAttach]);
@@ -92,9 +109,10 @@ export default function ChatGPTBrowser() {
     setLoading(false);
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(CHATGPT_INJECTION_SCRIPT);
-      if (pendingPaste && capturedContent && capturedContent.screenshotBase64) {
+      // Auto attach only if pending and not yet attached
+      if (pendingPaste && capturedContent && capturedContent.screenshotBase64 && !hasAttachedRef.current) {
         setTimeout(() => {
-          triggerAttach();
+          triggerAttach(false);
         }, 900);
       }
     }
@@ -178,7 +196,7 @@ export default function ChatGPTBrowser() {
           <View style={styles.bannerButtons}>
             <TouchableOpacity
               style={[styles.bannerActionBtn, styles.attachBtn]}
-              onPress={triggerAttach}
+              onPress={() => triggerAttach(true)}
             >
               <Ionicons name="attach" size={15} color="#ffffff" />
               <Text style={styles.attachBtnText}>Attach</Text>
@@ -186,7 +204,10 @@ export default function ChatGPTBrowser() {
 
             <TouchableOpacity
               style={[styles.bannerActionBtn, styles.clearBtn]}
-              onPress={clearCapturedContent}
+              onPress={() => {
+                hasAttachedRef.current = false;
+                clearCapturedContent();
+              }}
             >
               <Text style={styles.clearBtnText}>Clear</Text>
             </TouchableOpacity>
@@ -224,7 +245,7 @@ export default function ChatGPTBrowser() {
                 style={styles.modalAttachBtn}
                 onPress={() => {
                   setPreviewModalVisible(false);
-                  triggerAttach();
+                  triggerAttach(true);
                 }}
               >
                 <Ionicons name="attach" size={18} color="#ffffff" />
@@ -486,7 +507,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 8,
   },
-  modalAttachBtnText: {
+  modalPasteBtnText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700',

@@ -74,17 +74,12 @@ export default function LinkedInBrowser() {
     return () => subscription.remove();
   }, [canGoBack]);
 
-  // Apply zoom to WebView
+  // Apply vertical zoom to WebView
   const applyZoom = useCallback((zoom) => {
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(`
         if (typeof window.__JOBMAIL_SET_ZOOM === 'function') {
           window.__JOBMAIL_SET_ZOOM(${zoom});
-        } else {
-          try {
-            document.documentElement.style.zoom = ${zoom};
-            document.body.style.zoom = ${zoom};
-          } catch(e) {}
         }
         true;
       `);

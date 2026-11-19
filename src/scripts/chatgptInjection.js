@@ -1,13 +1,15 @@
 /**
- * JobMail - ChatGPT Injected Automation Script (v3)
+ * JobMail - ChatGPT Injected Automation Script (v4)
  *
- * Automatically attaches ONLY the captured screenshot into ChatGPT chat.
- * No extra text content is pasted.
+ * Automatically attaches EXACTLY ONE screenshot into ChatGPT chat.
+ * Prevents duplicate attachments and does not insert extra text.
  */
 
 export const CHATGPT_INJECTION_SCRIPT = `
 (function() {
   window.__JOBMAIL_CHATGPT_READY__ = true;
+  window.__JOBMAIL_LAST_ATTACH_TIME__ = window.__JOBMAIL_LAST_ATTACH_TIME__ || 0;
+  window.__JOBMAIL_IS_ATTACHING__ = false;
 
   function findChatInput() {
     return (
@@ -38,31 +40,31 @@ export const CHATGPT_INJECTION_SCRIPT = `
     }
   }
 
-  // Attach screenshot to ChatGPT (via File Input and Clipboard Paste event)
-  function attachScreenshot(base64Image) {
+  // Attach screenshot to ChatGPT - exactly ONE mechanism used
+  function attachScreenshotOnce(base64Image) {
     if (!base64Image) return false;
     try {
       var file = base64ToFile(base64Image, 'post-screenshot.png');
       if (!file) return false;
 
-      var attached = false;
-
-      // 1. Try ChatGPT file input element
+      // Method 1: Try ChatGPT file input element first
       var fileInputs = document.querySelectorAll('input[type="file"]');
-      for (var i = 0; i < fileInputs.length; i++) {
-        try {
-          var input = fileInputs[i];
-          var dt = new DataTransfer();
-          dt.items.add(file);
-          input.files = dt.files;
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          attached = true;
-          break;
-        } catch (e) {}
+      if (fileInputs && fileInputs.length > 0) {
+        for (var i = 0; i < fileInputs.length; i++) {
+          try {
+            var input = fileInputs[i];
+            var dt = new DataTransfer();
+            dt.items.add(file);
+            input.files = dt.files;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            // Succeeded with file input - STOP immediately so we don't attach twice!
+            return true;
+          } catch (e) {}
+        }
       }
 
-      // 2. Try dispatching paste event on chat prompt input with file in clipboardData
+      // Method 2: Fallback to paste event ONLY if file input was not found/usable
       var promptEl = findChatInput();
       if (promptEl) {
         try {
@@ -75,29 +77,42 @@ export const CHATGPT_INJECTION_SCRIPT = `
             clipboardData: pasteDt
           });
           promptEl.dispatchEvent(pasteEvent);
-          attached = true;
+          return true;
         } catch (e) {}
       }
 
-      return attached;
+      return false;
     } catch (e) {
-      console.warn('[JobMail:ChatGPT] attachScreenshot error:', e);
+      console.warn('[JobMail:ChatGPT] attachScreenshotOnce error:', e);
       return false;
     }
   }
 
-  // Only send screenshot - no extra text
-  window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY = function(base64Image) {
+  // Only send ONE screenshot - debounced against multiple triggers
+  window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY = function(base64Image, force) {
     if (!base64Image) return false;
+
+    var now = Date.now();
+    // Guard: ignore if attached within last 3 seconds unless forced
+    if (!force && (now - window.__JOBMAIL_LAST_ATTACH_TIME__ < 3000)) {
+      console.log('[JobMail:ChatGPT] Attach already completed recently, skipping duplicate.');
+      return true;
+    }
+
+    if (window.__JOBMAIL_IS_ATTACHING__) return false;
+    window.__JOBMAIL_IS_ATTACHING__ = true;
 
     var attempts = 0;
     var maxAttempts = 25;
 
     function tryAttach() {
       attempts++;
-      var success = attachScreenshot(base64Image);
+      var success = attachScreenshotOnce(base64Image);
 
       if (success) {
+        window.__JOBMAIL_LAST_ATTACH_TIME__ = Date.now();
+        window.__JOBMAIL_IS_ATTACHING__ = false;
+
         try {
           if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
             window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -111,6 +126,7 @@ export const CHATGPT_INJECTION_SCRIPT = `
       if (attempts < maxAttempts) {
         setTimeout(tryAttach, 300);
       } else {
+        window.__JOBMAIL_IS_ATTACHING__ = false;
         try {
           if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
             window.ReactNativeWebView.postMessage(JSON.stringify({

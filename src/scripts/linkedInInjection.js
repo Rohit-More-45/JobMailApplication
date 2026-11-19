@@ -22,22 +22,51 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   var state = window.__JOBMAIL_STATE__;
 
-  // Zoom Helper Function for Screen Zoom In / Zoom Out
+  // Vertical Zoom Function: Scales content vertically with ZERO horizontal blank space
   window.__JOBMAIL_SET_ZOOM = function(scale) {
     try {
       var s = parseFloat(scale) || 1.0;
-      if (document.documentElement) {
-        document.documentElement.style.zoom = s;
+      var styleId = 'jobmail-vertical-zoom-style';
+      var styleEl = document.getElementById(styleId);
+      if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = styleId;
+        (document.head || document.documentElement).appendChild(styleEl);
       }
-      if (document.body) {
-        document.body.style.zoom = s;
-      }
-      var meta = document.querySelector('meta[name="viewport"]');
-      if (meta) {
-        meta.content = 'width=device-width, initial-scale=' + s + ', minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes';
-      }
+
+      // Rendered width = (100 / s)% * s = exactly 100% full screen width (no blank side gaps)
+      var fullWidthPct = (100 / s).toFixed(3) + '%';
+
+      styleEl.textContent = \`
+        html {
+          width: 100% !important;
+          max-width: 100% !important;
+          overflow-x: hidden !important;
+        }
+        body {
+          zoom: \` + s + \` !important;
+          width: \` + fullWidthPct + \` !important;
+          min-width: \` + fullWidthPct + \` !important;
+          max-width: \` + fullWidthPct + \` !important;
+          margin-left: 0 !important;
+          margin-right: 0 !important;
+          overflow-x: hidden !important;
+        }
+        /* Keep all containers full width */
+        main, [role="main"], .scaffold-layout__main, .feed-outlet, .feed-shared-update-v2, [data-view-name="feed-full-update"] {
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+        /* Scale image heights proportionally when zoomed out so entire post fits vertically */
+        img {
+          max-height: \` + Math.round(440 * s) + \`px !important;
+          object-fit: contain !important;
+        }
+      \`;
+
       return s;
     } catch(e) {
+      console.warn('[JobMail] Error in vertical zoom:', e);
       return 1.0;
     }
   };
