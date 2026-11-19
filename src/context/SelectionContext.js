@@ -12,12 +12,16 @@ const SelectionContext = createContext({
   clearCapturedContent: () => {},
   pendingPaste: false,
   markPasteDone: () => {},
+  detectedEmail: null,
+  setDetectedEmail: () => {},
+  clearDetectedEmail: () => {},
 });
 
 export function SelectionProvider({ children }) {
   const [selectedPostId, setSelectedPostId] = useState(null);
   const [capturedContent, setCapturedContentState] = useState(null);
   const [pendingPaste, setPendingPaste] = useState(false);
+  const [detectedEmail, setDetectedEmail] = useState(null);
   const webViewRef = useRef(null);
 
   const registerWebView = useCallback((ref) => {
@@ -54,6 +58,10 @@ export function SelectionProvider({ children }) {
     setPendingPaste(false);
   }, []);
 
+  const clearDetectedEmail = useCallback(() => {
+    setDetectedEmail(null);
+  }, []);
+
   return (
     <SelectionContext.Provider
       value={{
@@ -68,6 +76,9 @@ export function SelectionProvider({ children }) {
         clearCapturedContent,
         pendingPaste,
         markPasteDone,
+        detectedEmail,
+        setDetectedEmail,
+        clearDetectedEmail,
       }}
     >
       {children}
