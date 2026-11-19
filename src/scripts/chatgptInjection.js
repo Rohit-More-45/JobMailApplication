@@ -1,13 +1,14 @@
 /**
- * JobMail - ChatGPT Injected Automation Script (v7)
+ * JobMail - ChatGPT Injected Automation Script (v8)
  *
  * Capabilities:
  * 1. Automatically ensures navigation to the FIRST PINNED CHAT (never a new chat).
  * 2. Attaches EXACTLY ONE screenshot cleanly (no duplicates, no extra text).
- * 3. Continuously monitors assistant responses for drafted email outputs:
- *    - mail adress : <email>
- *    - subject : <subject>
- *    - mail : <body>
+ * 3. Monitors STRICTLY THE LAST (LATEST) assistant response in the conversation:
+ *    - Extracts ONLY the last response (never previous turns, never whole document text).
+ *    - Recipient: extracted from "mail adress :" / "mail address :" / "email :"
+ *    - Subject: extracted from "subject :"
+ *    - Body: extracted from "mail :" with all trailing conversational chatter/notes stripped.
  * 4. Automatically detects when generation is complete and communicates details to React Native
  *    to open Gmail with pre-filled To, Subject, and Body.
  * 5. Injects an in-page "✉️ Open in Gmail" button right below the drafted email inside ChatGPT.
@@ -25,7 +26,7 @@ export const CHATGPT_INJECTION_SCRIPT = `
 
   // 1. In-page Styles for Gmail Action Buttons
   function injectStyles() {
-    var styleId = 'jobmail-chatgpt-styles-v7';
+    var styleId = 'jobmail-chatgpt-styles-v8';
     if (document.getElementById(styleId)) return;
 
     var style = document.createElement('style');
@@ -388,10 +389,10 @@ export const CHATGPT_INJECTION_SCRIPT = `
   };
 
   // =========================================================================
-  // GMAIL AUTO-DETECTION & EXTRACTION ENGINE
+  // GMAIL STRICT LAST-RESPONSE EXTRACTION ENGINE
   // =========================================================================
 
-  // Parse structured email details from assistant response
+  // Parse structured email details strictly from the last response text
   function parseEmailDetails(text) {
     if (!text) return null;
 
@@ -407,16 +408,23 @@ export const CHATGPT_INJECTION_SCRIPT = `
     // 2. Subject: 'subject :'
     var subjMatch = cleaned.match(/(?:^|\\n)\\s*subject\\s*:\\s*([^\\r\\n]+)/i);
 
-    // 3. Body: 'mail :' (not mail address), 'body :', 'content :'
+    // 3. Body: from 'mail :' to end (or from subject line if no mail label)
     var bodyMatch = cleaned.match(/(?:^|\\n)\\s*(?:mail(?!\\s*add?ress)|body|content|message)\\s*:\\s*([\\s\\S]*)$/i);
-
-    if (!addrMatch && !subjMatch && !bodyMatch) return null;
 
     var address = addrMatch ? addrMatch[1].trim() : '';
     var subject = subjMatch ? subjMatch[1].trim() : '';
-    var body = bodyMatch ? bodyMatch[1].trim() : '';
+    var body = '';
 
-    // Extract pure email address if found within the string
+    if (bodyMatch) {
+      body = bodyMatch[1].trim();
+    } else if (subjMatch) {
+      var subjIdx = cleaned.indexOf(subjMatch[0]);
+      if (subjIdx !== -1) {
+        body = cleaned.substring(subjIdx + subjMatch[0].length).trim();
+      }
+    }
+
+    // Extract pure email address if found within the address string
     var emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/;
     var emailInAddr = address.match(emailRegex);
     if (emailInAddr) {
@@ -424,9 +432,22 @@ export const CHATGPT_INJECTION_SCRIPT = `
     }
 
     if (body) {
-      // Clean accidental repeats of header fields
+      // Remove accidental repeats of header fields
       body = body.replace(/(?:^|\\n)\\s*(?:mail\\s*add?ress|email|to)\\s*:\\s*[^\\r\\n]+/gi, '');
       body = body.replace(/(?:^|\\n)\\s*subject\\s*:\\s*[^\\r\\n]+/gi, '');
+
+      // Strip trailing horizontal dividers and assistant conversational chatter/notes
+      var cutoffs = [
+        /(?:\\r?\\n)\\s*[-*_]{3,}\\s*(?:\\r?\\n[\\s\\S]*)?$/i, // Horizontal divider (---, ***)
+        /(?:\\r?\\n)\\s*(?:note|ps|p\\.s\\.)\\s*:\\s*[\\s\\S]*$/i, // Note: ... or PS: ...
+        /(?:\\r?\\n)\\s*(?:let me know if|hope this helps|feel free to|good luck with)[\\s\\S]*$/i,
+        /(?:\\r?\\n)\\s*(?:make sure to attach|remember to attach|don't forget to attach)[\\s\\S]*$/i,
+      ];
+
+      for (var c = 0; c < cutoffs.length; c++) {
+        body = body.replace(cutoffs[c], '');
+      }
+
       body = body.trim();
     }
 
@@ -447,47 +468,57 @@ export const CHATGPT_INJECTION_SCRIPT = `
     return !!stopBtn;
   }
 
-  // Find the relevant assistant turn containing the email output
-  function findAssistantMessageWithEmail() {
-    var assistantEls = document.querySelectorAll(
-      '[data-message-author-role="assistant"], article[data-testid*="conversation-turn-"], div[data-testid*="conversation-turn-"], .agent-turn'
-    );
+  // Find strictly the VERY LAST assistant response in the conversation
+  // Never read earlier chat history, never fall back to document.body
+  function findLastAssistantMessage() {
+    var targetEl = null;
 
+    // 1. Check all elements explicitly marked as assistant role
+    var assistantEls = document.querySelectorAll('[data-message-author-role="assistant"]');
     if (assistantEls && assistantEls.length > 0) {
-      for (var i = assistantEls.length - 1; i >= 0; i--) {
-        var el = assistantEls[i];
-        var role = el.getAttribute('data-message-author-role');
-        if (role === 'user') continue;
-
-        var text = (el.innerText || el.textContent || '').trim();
-        if (/mail\\s*add?ress/i.test(text) || (/subject\\s*:/i.test(text) && /mail\\s*:/i.test(text))) {
-          return { element: el, text: text };
+      targetEl = assistantEls[assistantEls.length - 1];
+    } else {
+      // 2. Check conversation turn articles (find the last non-user turn)
+      var turnArticles = document.querySelectorAll(
+        'article[data-testid*="conversation-turn-"], div[data-testid*="conversation-turn-"], .agent-turn'
+      );
+      if (turnArticles && turnArticles.length > 0) {
+        for (var i = turnArticles.length - 1; i >= 0; i--) {
+          var art = turnArticles[i];
+          var isUser = art.querySelector('[data-message-author-role="user"]') ||
+                       art.getAttribute('data-message-author-role') === 'user';
+          if (!isUser) {
+            targetEl = art;
+            break;
+          }
         }
       }
     }
 
-    // Markdown containers fallback
-    var markdownEls = document.querySelectorAll('.markdown, div[class*="markdown"], div.prose');
-    if (markdownEls && markdownEls.length > 0) {
-      for (var j = markdownEls.length - 1; j >= 0; j--) {
-        var mdEl = markdownEls[j];
-        var mdText = (mdEl.innerText || mdEl.textContent || '').trim();
-        if (/mail\\s*add?ress/i.test(mdText) || (/subject\\s*:/i.test(mdText) && /mail\\s*:/i.test(mdText))) {
-          return { element: mdEl, text: mdText };
-        }
+    // 3. Fallback: last .markdown container inside main chat area
+    if (!targetEl) {
+      var mainEl = document.querySelector('main') || document.querySelector('#main') || document.body;
+      var mdContainers = mainEl.querySelectorAll('.markdown, div[class*="markdown"], div.prose');
+      if (mdContainers && mdContainers.length > 0) {
+        targetEl = mdContainers[mdContainers.length - 1];
       }
     }
 
-    // Full document body fallback
-    var bodyText = document.body ? (document.body.innerText || '') : '';
-    if (/mail\\s*add?ress/i.test(bodyText) && /subject\\s*:/i.test(bodyText)) {
-      return { element: document.body, text: bodyText };
+    if (!targetEl) return null;
+
+    // Isolate ONLY the markdown text of this specific last assistant message
+    var textContainer = targetEl.querySelector('.markdown, div[class*="markdown"], div.prose') || targetEl;
+    var text = (textContainer.innerText || textContainer.textContent || '').trim();
+
+    // Verify this last response contains email fields
+    if (/mail\\s*add?ress/i.test(text) || (/subject\\s*:/i.test(text) && /mail\\s*:/i.test(text))) {
+      return { element: targetEl, text: text };
     }
 
     return null;
   }
 
-  // Injects an in-page "Open in Gmail" button inside the assistant message
+  // Injects an in-page "Open in Gmail" button inside the last assistant message
   function injectInPageGmailButton(targetEl, emailData) {
     if (!targetEl || targetEl === document.body) return;
 
@@ -516,26 +547,25 @@ export const CHATGPT_INJECTION_SCRIPT = `
       } catch (err) {}
     });
 
-    // Append button cleanly at the bottom of the message
     targetEl.appendChild(btn);
   }
 
-  // Scan and detect drafted emails from ChatGPT responses
+  // Scan and detect drafted emails strictly from the last response
   function scanForDraftedEmail(force) {
-    var match = findAssistantMessageWithEmail();
+    var match = findLastAssistantMessage();
     if (!match) return;
 
     var text = match.text;
     var targetEl = match.element;
 
-    // Check if text is currently changing
+    // Check if text is currently changing (streaming tokens)
     if (text !== window.__JOBMAIL_LAST_EMAIL_TEXT__) {
       window.__JOBMAIL_LAST_EMAIL_TEXT__ = text;
       window.__JOBMAIL_LAST_CHANGE_TIME__ = Date.now();
       return;
     }
 
-    // Do not trigger while ChatGPT is still actively generating tokens
+    // Do not trigger while ChatGPT is actively generating tokens
     var generating = isChatGPTGenerating();
     if (generating && !force) {
       return;
@@ -550,7 +580,7 @@ export const CHATGPT_INJECTION_SCRIPT = `
     var parsed = parseEmailDetails(text);
     if (!parsed) return;
 
-    // In-page button is always updated/injected
+    // In-page button is attached strictly to this last message
     injectInPageGmailButton(targetEl, parsed);
 
     // Unique key to prevent repeatedly auto-launching the same drafted email

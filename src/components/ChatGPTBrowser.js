@@ -22,6 +22,21 @@ import { useSelection } from '../context/SelectionContext';
 
 const CHATGPT_URL = 'https://chatgpt.com';
 
+function sanitizeBody(body) {
+  if (!body) return '';
+  let cleaned = body;
+  const cutoffs = [
+    /(?:\r?\n)\s*[-*_]{3,}\s*(?:\r?\n[\s\S]*)?$/i,
+    /(?:\r?\n)\s*(?:note|ps|p\.s\.)\s*:\s*[\s\S]*$/i,
+    /(?:\r?\n)\s*(?:let me know if|hope this helps|feel free to|good luck with)[\s\S]*$/i,
+    /(?:\r?\n)\s*(?:make sure to attach|remember to attach|don't forget to attach)[\s\S]*$/i,
+  ];
+  for (const c of cutoffs) {
+    cleaned = cleaned.replace(c, '');
+  }
+  return cleaned.trim();
+}
+
 const CHATGPT_USER_AGENT = Platform.select({
   android:
     'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
@@ -91,8 +106,9 @@ export default function ChatGPTBrowser() {
     if (emailData.subject) {
       parts.push(`subject=${encodeURIComponent(emailData.subject)}`);
     }
-    if (emailData.body) {
-      parts.push(`body=${encodeURIComponent(emailData.body)}`);
+    const cleanBody = sanitizeBody(emailData.body);
+    if (cleanBody) {
+      parts.push(`body=${encodeURIComponent(cleanBody)}`);
     }
 
     const query = parts.length > 0 ? `?${parts.join('&')}` : '';
@@ -185,14 +201,22 @@ export default function ChatGPTBrowser() {
         if (data.title) setPinnedTitle(data.title);
       } else if (data.type === 'CHATGPT_EMAIL_DETECTED') {
         if (data.data) {
-          setDetectedEmail(data.data);
-          // Automatically open Gmail with the attached info
-          openGmail(data.data);
+          const sanitized = {
+            ...data.data,
+            body: sanitizeBody(data.data.body),
+          };
+          setDetectedEmail(sanitized);
+          // Automatically open Gmail with strictly the last response's email details
+          openGmail(sanitized);
         }
       } else if (data.type === 'CHATGPT_OPEN_GMAIL') {
         if (data.data) {
-          setDetectedEmail(data.data);
-          openGmail(data.data);
+          const sanitized = {
+            ...data.data,
+            body: sanitizeBody(data.data.body),
+          };
+          setDetectedEmail(sanitized);
+          openGmail(sanitized);
         }
       }
     } catch (_e) {}
@@ -213,11 +237,12 @@ export default function ChatGPTBrowser() {
   // Copy full drafted email to clipboard
   const handleCopyEmail = useCallback(async () => {
     if (!detectedEmail) return;
+    const cleanBody = sanitizeBody(detectedEmail.body);
     const fullText = [
       `To: ${detectedEmail.address || ''}`,
       `Subject: ${detectedEmail.subject || ''}`,
       '',
-      detectedEmail.body || '',
+      cleanBody,
     ].join('\n');
 
     await Clipboard.setStringAsync(fullText);
