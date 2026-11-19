@@ -1,25 +1,16 @@
 /**
- * JobMail - LinkedIn Feed Post Detection & Radio Button Injection Script (v2)
+ * JobMail - LinkedIn Feed Post Detection & Content Extraction Script (v3)
  *
- * Designed to reliably:
- * 1. Execute inside LinkedIn WebView across page loads, redirects, and SPA client-side navigations.
- * 2. Multi-tier post detection:
- *    - Direct structural card selectors (feed-full-update, feed-shared-update-v2, data-urn, data-id)
- *    - Feed stream children (scaffold-finite-scroll__content > div)
- *    - Anchor-up traversal from author headers (update-components-actor) and social action bars
- * 3. Deduplicate posts and prevent duplicate radio buttons.
- * 4. Inject a custom circular radio button in the top-right corner of each post:
- *    - White background (#ffffff)
- *    - Blue border (2.5px solid #0a66c2)
- *    - Blue filled inner circle (#0a66c2) when selected
- * 5. Single-post selection + toggle-to-deselect.
- * 6. Subtle visual highlight on the selected post.
- * 7. Real-time debug logging via window.ReactNativeWebView.postMessage.
+ * Capabilities:
+ * 1. Multi-tier post detection & continuous observation via MutationObserver.
+ * 2. Visual radio button support with tap interception and single selection.
+ * 3. Content extraction: extracts all visible & non-visible text and attached photos
+ *    from the post currently visible to the user on screen (or selected post).
+ * 4. Communicates extracted content to React Native via window.ReactNativeWebView.postMessage.
  */
 
 export const LINKEDIN_INJECTION_SCRIPT = `
 (function() {
-  // Global state across multiple evaluations
   window.__JOBMAIL_STATE__ = window.__JOBMAIL_STATE__ || {
     selectedPostId: null,
     postCounter: 0,
@@ -31,7 +22,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   var state = window.__JOBMAIL_STATE__;
 
-  // 1. Logging Helper (sends structured messages to React Native)
+  // 1. Logging Helper
   function sendLog(type, details) {
     try {
       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -48,9 +39,9 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     } catch (e) {}
   }
 
-  // 2. Inject CSS Styles
+  // 2. CSS Styles Injection
   function injectStyles() {
-    var styleId = 'jobmail-injected-styles-v2';
+    var styleId = 'jobmail-injected-styles-v3';
     var existingStyle = document.getElementById(styleId);
     if (existingStyle) return;
 
@@ -64,6 +55,14 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         background-color: rgba(10, 102, 194, 0.035) !important;
         box-shadow: 0 4px 16px rgba(10, 102, 194, 0.18) !important;
         transition: outline 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease !important;
+      }
+
+      /* Flash Highlight on Captured Post */
+      .jobmail-post-captured {
+        outline: 3px solid #059669 !important;
+        background-color: rgba(5, 150, 105, 0.08) !important;
+        box-shadow: 0 0 20px rgba(5, 150, 105, 0.3) !important;
+        transition: all 0.3s ease !important;
       }
 
       /* Radio Button Container */
@@ -83,7 +82,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         touch-action: manipulation !important;
       }
 
-      /* Circular Radio Button: White background with blue border */
+      /* Circular Radio Button */
       .jobmail-radio-button {
         width: 24px !important;
         height: 24px !important;
@@ -102,7 +101,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         transform: scale(0.92) !important;
       }
 
-      /* Inner Dot: Transparent unselected, Blue filled circle when selected */
+      /* Inner Dot */
       .jobmail-radio-inner {
         width: 12px !important;
         height: 12px !important;
@@ -166,78 +165,53 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return fallbackId;
   }
 
-  // 4. Validate a candidate feed post.
-  // LinkedIn changes its internal markup frequently. Treat its explicit
-  // feed-card markers as authoritative; use content markers only as fallback.
+  // 4. Validate Post Element
   function isValidPostElement(el) {
     if (!el || el.nodeType !== 1) return false;
 
-    var className = (typeof el.className === 'string' ? el.className : '').toLowerCase();
-    var id = (el.id || '').toLowerCase();
-    var viewName = (el.getAttribute('data-view-name') || '').toLowerCase();
+    var className = (el.className || '').toString();
+    var id = (el.id || '').toString();
+    var viewName = el.getAttribute('data-view-name') || '';
 
-    // Never attach controls to comments, the composer, or page-level wrappers.
     if (
+      (className.indexOf('comment') !== -1 && className.indexOf('feed-shared-update') === -1) ||
       viewName === 'comment' ||
-      id.indexOf('comment') !== -1 ||
-      className.indexOf('comment-item') !== -1 ||
-      className.indexOf('share-box') !== -1 ||
-      viewName === 'feed-share-box' ||
-      id.indexOf('share-box') !== -1 ||
-      el.tagName.toLowerCase() === 'main' ||
-      el.tagName.toLowerCase() === 'body' ||
-      className.indexOf('scaffold-finite-scroll__content') !== -1 ||
-      className.indexOf('feed-container') !== -1
-    ) return false;
-
-    // Strong markers used by several LinkedIn feed layouts.
-    var strongCandidate =
-      viewName === 'feed-full-update' ||
-      el.classList.contains('feed-shared-update-v2') ||
-      el.matches('article.feed-shared-update, article[data-activity-id]') ||
-      (el.matches('[data-urn], [data-activity-urn], [data-entity-urn], [data-chameleon-result-urn]') &&
-        /urn:li:(activity|ugcPost|share)/i.test(
-          (el.getAttribute('data-urn') || '') + ' ' +
-          (el.getAttribute('data-activity-urn') || '') + ' ' +
-          (el.getAttribute('data-entity-urn') || '') + ' ' +
-          (el.getAttribute('data-chameleon-result-urn') || '')
-        ));
-
-    if (strongCandidate) return true;
-
-    // Fallback for feed variants that do not expose the older class names.
-    return !!el.querySelector(
-      '.update-components-actor, [class*="update-components-actor"], ' +
-      '.feed-shared-actor, [class*="feed-shared-actor"], ' +
-      '[data-view-name="feed-social-actions"], ' +
-      '.feed-shared-social-action-bar, [class*="social-actions"]'
-    );
-  }
-
-  // 5. Resolve a child element to its containing feed card.
-  // Prefer the direct item inside LinkedIn's finite-scroll feed; this works
-  // even when LinkedIn renames its internal actor/header classes.
-  function climbToPostCard(startEl) {
-    if (!startEl || !startEl.closest) return null;
-
-    var feedRoot = startEl.closest(
-      '.scaffold-finite-scroll__content, [data-view-name="scaffold-finite-scroll__content"]'
-    );
-    if (feedRoot) {
-      var item = startEl;
-      while (item.parentElement && item.parentElement !== feedRoot) {
-        item = item.parentElement;
-      }
-      if (item.parentElement === feedRoot && isValidPostElement(item)) {
-        return item;
-      }
+      id.indexOf('comment') !== -1
+    ) {
+      return false;
     }
 
+    if (
+      className.indexOf('share-box') !== -1 ||
+      viewName === 'feed-share-box' ||
+      id.indexOf('share-box') !== -1
+    ) {
+      return false;
+    }
+
+    if (
+      className.indexOf('scaffold-finite-scroll__content') !== -1 ||
+      className.indexOf('feed-container') !== -1 ||
+      el.tagName.toLowerCase() === 'main' ||
+      el.tagName.toLowerCase() === 'body'
+    ) {
+      return false;
+    }
+
+    var hasPostMarkers = el.querySelector(
+      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="social"], [class*="social-actions"], a[href*="/in/"], a[href*="activity"]'
+    ) !== null;
+
+    return hasPostMarkers;
+  }
+
+  // 5. Upward climbing to enclosing post card
+  function climbToPostCard(startEl) {
     var curr = startEl;
     var candidate = null;
-    var depth = 0;
-    while (curr && curr !== document.body && curr !== document.documentElement && depth < 12) {
-      var cName = (typeof curr.className === 'string' ? curr.className : '').toLowerCase();
+
+    while (curr && curr !== document.body && curr !== document.documentElement) {
+      var cName = (curr.className || '').toString();
       if (cName.indexOf('share-box') !== -1 || cName.indexOf('comment-item') !== -1) {
         return null;
       }
@@ -245,84 +219,28 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       if (
         curr.getAttribute('data-view-name') === 'feed-full-update' ||
         curr.classList.contains('feed-shared-update-v2') ||
-        curr.matches('article[data-activity-id], article') ||
-        /urn:li:(activity|ugcPost|share)/i.test(
-          (curr.getAttribute('data-urn') || '') + ' ' +
-          (curr.getAttribute('data-activity-urn') || '') + ' ' +
-          (curr.getAttribute('data-entity-urn') || '')
-        )
+        curr.getAttribute('data-urn') ||
+        curr.getAttribute('data-id') ||
+        curr.getAttribute('data-activity-urn') ||
+        curr.tagName.toLowerCase() === 'article' ||
+        (curr.parentElement && (
+          curr.parentElement.classList.contains('scaffold-finite-scroll__content') ||
+          curr.parentElement.getAttribute('role') === 'main'
+        ))
       ) {
         candidate = curr;
+        if (curr.parentElement && curr.parentElement.classList.contains('scaffold-finite-scroll__content')) {
+          return curr;
+        }
       }
+
       curr = curr.parentElement;
-      depth++;
     }
+
     return candidate;
   }
 
-  // 5b. Class-name-independent detection.
-  // LinkedIn (esp. the mobile site) uses hashed/changing class names, so we
-  // find each post's action bar (Like / Comment / Repost / Send buttons) by its
-  // label, then climb until the next level up would contain a different post.
-  var ACTION_RE = /^(react\\s+)?(like|comment|repost|send|share)\\b/i;
-
-  function actionButtonsIn(root) {
-    var out = [];
-    var nodes = root.querySelectorAll('button, [role="button"], a[role="button"]');
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
-      var label = (n.getAttribute('aria-label') || n.innerText || n.textContent || '').trim();
-      if (label.length > 0 && label.length < 40 && ACTION_RE.test(label)) out.push(n);
-    }
-    return out;
-  }
-
-  function countLikeButtons(root) {
-    var c = 0;
-    var nodes = root.querySelectorAll('button, [role="button"]');
-    for (var i = 0; i < nodes.length; i++) {
-      var label = (nodes[i].getAttribute('aria-label') || nodes[i].innerText || '').trim();
-      if (label.length < 40 && /^(react\\s+)?like\\b/i.test(label)) c++;
-    }
-    return c;
-  }
-
-  function findPostsByActionBar() {
-    var found = [];
-    var buttons = actionButtonsIn(document);
-    var seenBars = [];
-    buttons.forEach(function(btn) {
-      var curr = btn;
-      var depth = 0;
-      // climb to the smallest ancestor that holds >= 2 distinct action buttons (the action bar)
-      while (curr.parentElement && depth < 8) {
-        if (actionButtonsIn(curr).length >= 2) break;
-        curr = curr.parentElement;
-        depth++;
-      }
-      if (actionButtonsIn(curr).length < 2) return;
-      if (seenBars.indexOf(curr) !== -1) return;
-      seenBars.push(curr);
-
-      // climb while the parent still contains only THIS post's Like button
-      var card = curr;
-      var guard = 0;
-      while (card.parentElement && guard < 25) {
-        var parent = card.parentElement;
-        var tag = parent.tagName.toLowerCase();
-        if (tag === 'body' || tag === 'html' || tag === 'main' || parent.getAttribute('role') === 'main') break;
-        if (countLikeButtons(parent) > 1) break;
-        if (parent.querySelector('[class*="share-box"], [data-view-name="feed-share-box"]')) break;
-        card = parent;
-        guard++;
-      }
-      // sanity: a post card has some height and is not tiny
-      if (card.offsetHeight >= 120 && found.indexOf(card) === -1) found.push(card);
-    });
-    return found;
-  }
-
-  // 6. Find All Feed Post Cards
+  // 6. Find All Feed Posts
   function findFeedPosts() {
     var postsSet = [];
 
@@ -332,13 +250,8 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       }
     }
 
-    // Strategy 1: Direct structural selectors
     var directSelectors = [
       '[data-view-name="feed-full-update"]',
-      '[data-view-name*="feed"][data-view-name*="update"]',
-      '.feed-shared-update-v2',
-      'article[data-activity-id]',
-      '[data-chameleon-result-urn]',
       'div.feed-shared-update-v2',
       'div[class*="feed-shared-update-v2"]',
       'div[data-urn*="urn:li:activity"]',
@@ -365,7 +278,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       } catch (e) {}
     });
 
-    // Strategy 2: Children of finite-scroll container
     var feedContainers = document.querySelectorAll(
       '.scaffold-finite-scroll__content, [data-view-name="scaffold-finite-scroll__content"], main [role="main"]'
     );
@@ -374,7 +286,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       for (var ch = 0; ch < children.length; ch++) {
         var child = children[ch];
         if (child.classList.contains('occludable-update')) {
-          var inner = child.querySelector('[data-view-name="feed-full-update"], .feed-shared-update-v2, [data-urn*="urn:li:activity"], [data-urn*="urn:li:ugcPost"], [data-urn*="urn:li:share"]') || child;
+          var inner = child.querySelector('.feed-shared-update-v2, [data-view-name="feed-full-update"], [data-urn], [data-id]') || child.firstElementChild || child;
           addIfValid(inner);
         } else {
           addIfValid(child);
@@ -382,16 +294,14 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       }
     }
 
-    // Strategy 3: Upward traversal from Actor headers
     var actors = document.querySelectorAll(
-      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="actor"]'
+      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"]'
     );
     for (var a = 0; a < actors.length; a++) {
       var cardFromActor = climbToPostCard(actors[a]);
       addIfValid(cardFromActor);
     }
 
-    // Strategy 4: Upward traversal from Social Action Bars
     var socialBars = document.querySelectorAll(
       '[data-view-name="feed-social-actions"], .feed-shared-social-action-bar, [class*="feed-shared-social-actions"], [class*="social-actions"]'
     );
@@ -400,7 +310,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       addIfValid(cardFromSocial);
     }
 
-    // Strategy 5: Upward traversal from Control menu buttons
     var menuButtons = document.querySelectorAll(
       'button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="Control" i], .feed-shared-control-menu'
     );
@@ -409,22 +318,14 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       addIfValid(cardFromMenu);
     }
 
-    // Strategy 6: label-based action-bar detection (works when class names change)
-    try {
-      findPostsByActionBar().forEach(function(el) {
-        if (postsSet.indexOf(el) === -1 && !el.querySelector('.jobmail-radio-container')) {
-          postsSet.push(el);
-        } else if (postsSet.indexOf(el) === -1) {
-          postsSet.push(el);
-        }
-      });
-    } catch (e) { sendLog('ACTIONBAR_ERROR', String(e)); }
-
-    // Filter out wrappers if inner card is present
     var finalPosts = [];
     postsSet.forEach(function(el) {
       var isOuterWrapper = postsSet.some(function(other) {
-        return other !== el && el.contains(other);
+        return other !== el && el.contains(other) && (
+          el.classList.contains('occludable-update') ||
+          el.classList.contains('scaffold-finite-scroll__content') ||
+          el.getAttribute('role') === 'main'
+        );
       });
       if (!isOuterWrapper) {
         finalPosts.push(el);
@@ -434,7 +335,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return finalPosts;
   }
 
-  // 7. Update Visual State for All Posts
+  // 7. Update Visual States
   function updateAllVisualStates() {
     var allContainers = document.querySelectorAll('.jobmail-radio-container');
     allContainers.forEach(function(container) {
@@ -463,7 +364,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     });
   }
 
-  // 8. Toggle Selection Logic (Single selection + toggle deselect)
+  // 8. Toggle Selection
   function togglePostSelection(postId) {
     if (state.selectedPostId === postId) {
       state.selectedPostId = null;
@@ -473,7 +374,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
     updateAllVisualStates();
 
-    // Notify React Native
     try {
       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
         window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -488,7 +388,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     sendLog('SELECTION_TOGGLED', { selectedPostId: state.selectedPostId });
   }
 
-  // 9. Synchronize Existing Button Visual State
+  // 9. Synchronize Button State
   function syncButtonVisualState(post, container, postId) {
     var isSelected = (postId && postId === state.selectedPostId && state.selectedPostId !== null);
     if (isSelected) {
@@ -509,18 +409,16 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     }
   }
 
-  // 10. Inject Radio Button on a Post
+  // 10. Inject Radio Button
   function injectRadioButton(post) {
     var postId = getPostId(post);
     post.classList.add('jobmail-post-container');
 
-    // Ensure relative positioning on the post card
     var computedPos = window.getComputedStyle(post).position;
     if (computedPos === 'static') {
       post.style.position = 'relative';
     }
 
-    // Check if container already exists as a child of this post
     var existingContainer = null;
     for (var i = 0; i < post.children.length; i++) {
       if (post.children[i].classList && post.children[i].classList.contains('jobmail-radio-container')) {
@@ -531,15 +429,13 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
     if (existingContainer) {
       syncButtonVisualState(post, existingContainer, postId);
-      return false; // Already present, no duplicate
+      return false;
     }
 
-    // Create radio container
     var container = document.createElement('div');
     container.className = 'jobmail-radio-container';
     container.setAttribute('data-post-id', postId);
 
-    // Offset neatly to the left of existing LinkedIn 3-dots/options menu button
     var menuBtn = post.querySelector(
       'button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="Control" i], .feed-shared-control-menu, .feed-shared-update-v2__control-menu, button[aria-label*="Dismiss" i]'
     );
@@ -549,12 +445,10 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       container.style.right = '12px';
     }
 
-    // Circular radio button with white background and blue border
     var radioBtn = document.createElement('div');
     radioBtn.className = 'jobmail-radio-button';
     radioBtn.setAttribute('role', 'radio');
 
-    // Inner circle (fills blue when active)
     var innerDot = document.createElement('div');
     innerDot.className = 'jobmail-radio-inner';
     radioBtn.appendChild(innerDot);
@@ -569,7 +463,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       radioBtn.setAttribute('aria-checked', 'false');
     }
 
-    // Tap/Click handling with event capture to prevent LinkedIn feed navigation
     container.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
@@ -577,16 +470,11 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       togglePostSelection(postId);
     }, true);
 
-    container.addEventListener('touchstart', function(e) {
-      e.stopPropagation();
-    }, { passive: true });
-
-    container.addEventListener('touchend', function(e) {
-      e.stopPropagation();
-    }, { passive: true });
+    container.addEventListener('touchstart', function(e) { e.stopPropagation(); }, { passive: true });
+    container.addEventListener('touchend', function(e) { e.stopPropagation(); }, { passive: true });
 
     post.appendChild(container);
-    return true; // Newly inserted
+    return true;
   }
 
   // 11. Main Scan Routine
@@ -602,21 +490,167 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       }
     });
 
-    if (posts.length !== state.lastScannedCount || newButtonsCount > 0 || reason === 'initial_setup') {
+    if (posts.length !== state.lastScannedCount || newButtonsCount > 0) {
       state.lastScannedCount = posts.length;
       sendLog('POSTS_SCANNED', {
         reason: reason || 'scan',
         postsDetected: posts.length,
         newButtonsInserted: newButtonsCount,
-        feedRootCount: document.querySelectorAll('.scaffold-finite-scroll__content, [data-view-name="scaffold-finite-scroll__content"]').length,
-        explicitFeedCardCount: document.querySelectorAll('[data-view-name="feed-full-update"], [data-view-name*="feed"][data-view-name*="update"], .feed-shared-update-v2, article[data-activity-id]').length,
-        actorMarkerCount: document.querySelectorAll('.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="actor"]').length,
-        actionButtons: actionButtonsIn(document).length,
         selectedPostId: state.selectedPostId,
         url: window.location.href
       });
     }
   }
+
+  // 12. Find the Post Currently Visible on User's Screen
+  function getVisibleFeedPost() {
+    // If a post is selected, prioritize it
+    if (state.selectedPostId) {
+      var selectedEl = document.querySelector('[data-jobmail-post-id="' + state.selectedPostId + '"]');
+      if (selectedEl) return selectedEl;
+    }
+
+    var posts = findFeedPosts();
+    if (!posts || posts.length === 0) return null;
+
+    var viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    var viewportCenter = viewportHeight / 2;
+
+    var bestPost = null;
+    var bestDist = Infinity;
+
+    for (var i = 0; i < posts.length; i++) {
+      var rect = posts[i].getBoundingClientRect();
+      // Check if post overlaps viewport
+      if (rect.bottom > 80 && rect.top < viewportHeight - 80) {
+        var postCenter = (rect.top + rect.bottom) / 2;
+        var dist = Math.abs(postCenter - viewportCenter);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestPost = posts[i];
+        }
+      }
+    }
+
+    return bestPost || posts[0] || null;
+  }
+
+  // 13. Extract All Content from the Visible/Selected Post
+  window.__JOBMAIL_EXTRACT_VISIBLE_POST = function() {
+    var postEl = getVisibleFeedPost();
+    if (!postEl) {
+      sendLog('EXTRACT_FAILED', { reason: 'No visible post detected in feed' });
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'POST_EXTRACT_ERROR',
+          message: 'No LinkedIn feed post is currently visible on screen. Please scroll to a post and try again.'
+        }));
+      }
+      return;
+    }
+
+    // Flash captured effect on post card
+    postEl.classList.add('jobmail-post-captured');
+    setTimeout(function() {
+      postEl.classList.remove('jobmail-post-captured');
+    }, 1500);
+
+    // 1. Expand all 'see more' buttons to reveal complete text
+    try {
+      var seeMoreButtons = postEl.querySelectorAll(
+        'button[class*="see-more"], button[class*="show-more"], [class*="see-more-btn"], button[aria-label*="see more" i]'
+      );
+      seeMoreButtons.forEach(function(b) {
+        try { b.click(); } catch(e) {}
+      });
+    } catch(e) {}
+
+    // 2. Extract Author & Headline
+    var author = '';
+    var headline = '';
+    var authorEl = postEl.querySelector(
+      '.update-components-actor__name, [class*="actor__name"], .feed-shared-actor__name, [class*="actor__title"], h3, h2, a[href*="/in/"]'
+    );
+    if (authorEl) {
+      author = (authorEl.innerText || authorEl.textContent || '').trim();
+    }
+
+    var headlineEl = postEl.querySelector(
+      '.update-components-actor__description, [class*="actor__description"], .feed-shared-actor__sub-description, [class*="actor__headline"]'
+    );
+    if (headlineEl) {
+      headline = (headlineEl.innerText || headlineEl.textContent || '').trim();
+    }
+
+    // 3. Extract Full Text (both visible & hidden)
+    var postText = '';
+    var textContainer = postEl.querySelector(
+      '.update-components-text, .feed-shared-update-v2__description-wrapper, [class*="update-components-text"], [class*="commentary"], [data-view-name="feed-update-text"]'
+    );
+    if (textContainer) {
+      postText = (textContainer.innerText || textContainer.textContent || '').trim();
+    } else {
+      var clone = postEl.cloneNode(true);
+      var unwanted = clone.querySelectorAll(
+        'script, style, button, [class*="social"], [class*="action"], .jobmail-radio-container'
+      );
+      unwanted.forEach(function(u) { u.remove(); });
+      postText = (clone.innerText || clone.textContent || '').trim();
+    }
+
+    // 4. Extract Photos / Media
+    var photoUrls = [];
+    var images = postEl.querySelectorAll('img');
+    images.forEach(function(img) {
+      var src = img.currentSrc || img.src || img.getAttribute('data-delayed-url');
+      if (src && src.indexOf('data:image') === -1) {
+        var width = img.naturalWidth || img.width || img.offsetWidth;
+        var height = img.naturalHeight || img.height || img.offsetHeight;
+        var isContentImg = (width > 120 && height > 120) ||
+          (img.closest && img.closest('[class*="image"], [class*="media"], [class*="article"], [class*="carousel"]'));
+        if (isContentImg && photoUrls.indexOf(src) === -1) {
+          photoUrls.push(src);
+        }
+      }
+    });
+
+    var postId = getPostId(postEl);
+
+    // Format comprehensive output text for ChatGPT
+    var sections = [];
+    if (author) {
+      sections.push('Author: ' + author + (headline ? ' (' + headline + ')' : ''));
+    }
+    if (postText) {
+      sections.push('\\n' + postText);
+    }
+    if (photoUrls.length > 0) {
+      sections.push('\\nPhotos Attached (' + photoUrls.length + '):\\n' + photoUrls.join('\\n'));
+    }
+
+    var fullContent = sections.join('\\n');
+
+    sendLog('POST_EXTRACTED_SUCCESS', {
+      author: author,
+      hasText: postText.length > 0,
+      photoCount: photoUrls.length,
+      postId: postId
+    });
+
+    if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'POST_EXTRACTED',
+        data: {
+          author: author,
+          headline: headline,
+          text: postText,
+          photos: photoUrls,
+          fullContent: fullContent,
+          postId: postId
+        }
+      }));
+    }
+  };
 
   // Expose trigger scan globally
   window.__JOBMAIL_TRIGGER_SCAN = function(reason) {
@@ -640,7 +674,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     sendLog('DESELECT_ALL', {});
   };
 
-  // 12. Setup MutationObserver and SPA Hooks
+  // 14. Setup Engine
   function setupEngine() {
     injectStyles();
     scanAndInjectPosts('initial_setup');
@@ -665,7 +699,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       });
     }
 
-    // Safety fallback interval for virtualized list recycles and SPA scrolling
     if (!state.intervalSet) {
       state.intervalSet = true;
       setInterval(function() {
@@ -673,7 +706,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       }, 1000);
     }
 
-    // Hook SPA navigations
     if (!state.spaHooked && window.history) {
       state.spaHooked = true;
       var originalPushState = window.history.pushState;
@@ -703,7 +735,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     });
   }
 
-  // Run initialization
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', setupEngine);
   } else {

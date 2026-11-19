@@ -27,8 +27,8 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'LinkedIn Automation',
-          tabBarLabel: 'LinkedIn Automation',
+          title: 'LinkedIn',
+          tabBarLabel: 'LinkedIn',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'globe' : 'globe-outline'}
@@ -39,15 +39,15 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="pending1"
+        name="chatgpt"
         options={{
-          title: 'Pending',
-          tabBarLabel: 'Pending',
+          title: 'ChatGPT',
+          tabBarLabel: 'ChatGPT',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
-              name={focused ? 'time' : 'time-outline'}
+              name={focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
               size={22}
-              color={color}
+              color={focused ? '#10a37f' : color}
             />
           ),
         }}

@@ -9,6 +9,7 @@ export default function BrowserHeader({
   onGoBack,
   onReload,
   onGoFeed,
+  onSendToChatGPT,
   currentUrl = '',
   loading = false,
   detectedCount = 0,
@@ -62,6 +63,16 @@ export default function BrowserHeader({
               color={loading ? '#0a66c2' : '#334155'}
             />
           </TouchableOpacity>
+
+          {/* Quick Send to ChatGPT button */}
+          <TouchableOpacity
+            style={styles.sendHeaderBtn}
+            onPress={onSendToChatGPT}
+            accessibilityLabel="Extract and send to ChatGPT"
+          >
+            <Ionicons name="chatbubble-ellipses" size={14} color="#ffffff" />
+            <Text style={styles.sendHeaderBtnText}>ChatGPT</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -74,23 +85,32 @@ export default function BrowserHeader({
               1 Post Selected
             </Text>
             <TouchableOpacity
+              onPress={onSendToChatGPT}
+              style={styles.sendInlineBtn}
+            >
+              <Text style={styles.sendInlineBtnText}>Send to ChatGPT ➔</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
               onPress={clearSelection}
               style={styles.clearButton}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             >
               <Ionicons name="close-circle" size={16} color="#0a66c2" />
-              <Text style={styles.clearButtonText}>Clear</Text>
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.selectionPillInactive}>
-            <Ionicons name="radio-button-off" size={14} color="#0a66c2" />
-            <Text style={styles.selectionTextInactive}>
+          <TouchableOpacity
+            style={styles.selectionPillInactive}
+            onPress={onSendToChatGPT}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="arrow-forward-circle" size={16} color="#0a66c2" />
+            <Text style={styles.selectionTextInactive} numberOfLines={1}>
               {detectedCount > 0
-                ? `${detectedCount} posts ready – tap radio to select`
-                : 'Tap the circular radio button on any post to select'}
+                ? `${detectedCount} posts ready – Tap to Send Visible Post ➔`
+                : 'Tap to Send Visible Post to ChatGPT ➔'}
             </Text>
-          </View>
+          </TouchableOpacity>
         )}
       </View>
     </View>
@@ -169,6 +189,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
+  sendHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#10a37f',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
+  },
+  sendHeaderBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   statusRow: {
     marginTop: 6,
     flexDirection: 'row',
@@ -193,36 +227,42 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a66c2',
   },
   selectionTextActive: {
-    flex: 1,
     fontSize: 12,
     fontWeight: '600',
     color: '#0a66c2',
+  },
+  sendInlineBtn: {
+    flex: 1,
+    backgroundColor: '#0a66c2',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  sendInlineBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
   },
   clearButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  clearButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#0a66c2',
+    padding: 2,
   },
   selectionPillInactive: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#eff6ff',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#bfdbfe',
     borderRadius: 20,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     gap: 6,
   },
   selectionTextInactive: {
+    flex: 1,
     fontSize: 12,
-    color: '#64748b',
-    fontWeight: '400',
+    color: '#0a66c2',
+    fontWeight: '600',
   },
 });
