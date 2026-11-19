@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   BackHandler,
   Platform,
-  Alert,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
@@ -69,6 +68,11 @@ export default function LinkedInBrowser() {
       webViewRef.current.injectJavaScript(`
         if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
           window.__JOBMAIL_EXTRACT_VISIBLE_POST();
+        } else {
+          ${LINKEDIN_INJECTION_SCRIPT}
+          if (typeof window.__JOBMAIL_EXTRACT_VISIBLE_POST === 'function') {
+            window.__JOBMAIL_EXTRACT_VISIBLE_POST();
+          }
         }
         true;
       `);
@@ -89,8 +93,6 @@ export default function LinkedInBrowser() {
           setCapturedContent(data.data);
           // Navigate to ChatGPT tab
           router.push('/(tabs)/chatgpt');
-        } else if (data.type === 'POST_EXTRACT_ERROR') {
-          Alert.alert('Notice', data.message || 'Please scroll to a post and try again.');
         } else if (data.type === 'DEBUG_LOG') {
           console.log(
             `[JobMail Debug] ${data.subType}:`,

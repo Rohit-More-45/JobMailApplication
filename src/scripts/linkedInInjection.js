@@ -1,12 +1,12 @@
 /**
- * JobMail - LinkedIn Feed Post Detection & Content Extraction Script (v3)
+ * JobMail - LinkedIn Feed Post Detection & Content Extraction Script (v4)
  *
- * Capabilities:
- * 1. Multi-tier post detection & continuous observation via MutationObserver.
- * 2. Visual radio button support with tap interception and single selection.
- * 3. Content extraction: extracts all visible & non-visible text and attached photos
- *    from the post currently visible to the user on screen (or selected post).
- * 4. Communicates extracted content to React Native via window.ReactNativeWebView.postMessage.
+ * Designed to reliably:
+ * 1. Capture the LinkedIn post visible on the user's screen using elementFromPoint sampling.
+ * 2. Automatically expand all "...see more" buttons to extract all visible and non-visible text.
+ * 3. Extract author, headline, full body text, and all attached photos.
+ * 4. Fall back to direct viewport harvesting so post extraction NEVER fails.
+ * 5. Send structured content to React Native via window.ReactNativeWebView.postMessage.
  */
 
 export const LINKEDIN_INJECTION_SCRIPT = `
@@ -41,7 +41,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   // 2. CSS Styles Injection
   function injectStyles() {
-    var styleId = 'jobmail-injected-styles-v3';
+    var styleId = 'jobmail-injected-styles-v4';
     var existingStyle = document.getElementById(styleId);
     if (existingStyle) return;
 
@@ -59,9 +59,9 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
       /* Flash Highlight on Captured Post */
       .jobmail-post-captured {
-        outline: 3px solid #059669 !important;
-        background-color: rgba(5, 150, 105, 0.08) !important;
-        box-shadow: 0 0 20px rgba(5, 150, 105, 0.3) !important;
+        outline: 3.5px solid #10a37f !important;
+        background-color: rgba(16, 163, 127, 0.08) !important;
+        box-shadow: 0 0 24px rgba(16, 163, 127, 0.35) !important;
         transition: all 0.3s ease !important;
       }
 
@@ -127,7 +127,8 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   // 3. Post ID Extraction
   function getPostId(el) {
-    if (el.dataset.jobmailPostId) {
+    if (!el) return 'jobmail_post_' + (++state.postCounter);
+    if (el.dataset && el.dataset.jobmailPostId) {
       return el.dataset.jobmailPostId;
     }
 
@@ -150,87 +151,51 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       }
     }
 
-    var childWithUrn = el.querySelector('[data-urn*="urn:li:activity:"], [data-id*="urn:li:activity:"]');
-    if (childWithUrn) {
-      var cUrn = childWithUrn.getAttribute('data-urn') || childWithUrn.getAttribute('data-id');
-      if (cUrn) {
-        el.dataset.jobmailPostId = cUrn;
-        return cUrn;
-      }
-    }
-
     state.postCounter++;
     var fallbackId = 'jobmail_post_' + state.postCounter;
-    el.dataset.jobmailPostId = fallbackId;
+    if (el.dataset) el.dataset.jobmailPostId = fallbackId;
     return fallbackId;
   }
 
-  // 4. Validate Post Element
-  function isValidPostElement(el) {
-    if (!el || el.nodeType !== 1) return false;
+  // 4. Find Post Card From Any Node
+  function findPostCardFromNode(node) {
+    if (!node || node === document.body || node === document.documentElement) return null;
 
-    var className = (el.className || '').toString();
-    var id = (el.id || '').toString();
-    var viewName = el.getAttribute('data-view-name') || '';
-
-    if (
-      (className.indexOf('comment') !== -1 && className.indexOf('feed-shared-update') === -1) ||
-      viewName === 'comment' ||
-      id.indexOf('comment') !== -1
-    ) {
-      return false;
-    }
-
-    if (
-      className.indexOf('share-box') !== -1 ||
-      viewName === 'feed-share-box' ||
-      id.indexOf('share-box') !== -1
-    ) {
-      return false;
-    }
-
-    if (
-      className.indexOf('scaffold-finite-scroll__content') !== -1 ||
-      className.indexOf('feed-container') !== -1 ||
-      el.tagName.toLowerCase() === 'main' ||
-      el.tagName.toLowerCase() === 'body'
-    ) {
-      return false;
-    }
-
-    var hasPostMarkers = el.querySelector(
-      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"], [data-view-name*="social"], [class*="social-actions"], a[href*="/in/"], a[href*="activity"]'
-    ) !== null;
-
-    return hasPostMarkers;
-  }
-
-  // 5. Upward climbing to enclosing post card
-  function climbToPostCard(startEl) {
-    var curr = startEl;
+    var curr = node;
     var candidate = null;
 
     while (curr && curr !== document.body && curr !== document.documentElement) {
-      var cName = (curr.className || '').toString();
-      if (cName.indexOf('share-box') !== -1 || cName.indexOf('comment-item') !== -1) {
+      if (curr.classList && (curr.classList.contains('jobmail-radio-container') || curr.id === 'jobmail-injected-styles-v4')) {
         return null;
       }
 
+      var vName = curr.getAttribute('data-view-name') || '';
+      var cName = (curr.className || '').toString();
+      var dUrn = curr.getAttribute('data-urn') || curr.getAttribute('data-id') || '';
+
       if (
-        curr.getAttribute('data-view-name') === 'feed-full-update' ||
-        curr.classList.contains('feed-shared-update-v2') ||
-        curr.getAttribute('data-urn') ||
-        curr.getAttribute('data-id') ||
-        curr.getAttribute('data-activity-urn') ||
-        curr.tagName.toLowerCase() === 'article' ||
-        (curr.parentElement && (
-          curr.parentElement.classList.contains('scaffold-finite-scroll__content') ||
-          curr.parentElement.getAttribute('role') === 'main'
-        ))
+        vName === 'feed-full-update' ||
+        cName.indexOf('feed-shared-update') !== -1 ||
+        dUrn.indexOf('urn:li:activity') !== -1 ||
+        curr.tagName.toLowerCase() === 'article'
       ) {
-        candidate = curr;
-        if (curr.parentElement && curr.parentElement.classList.contains('scaffold-finite-scroll__content')) {
-          return curr;
+        return curr;
+      }
+
+      var rect = curr.getBoundingClientRect();
+      if (rect.height > 120) {
+        var text = (curr.innerText || '').trim();
+        var hasActor = curr.querySelector('[class*="actor"], [class*="author"], a[href*="/in/"]') !== null;
+        var hasButtons = curr.querySelector('button') !== null;
+
+        if (hasActor && hasButtons && text.length > 35) {
+          candidate = curr;
+          if (curr.parentElement && curr.parentElement.children.length > 1) {
+            var pRect = curr.parentElement.getBoundingClientRect();
+            if (pRect.height > rect.height * 1.2) {
+              return curr;
+            }
+          }
         }
       }
 
@@ -240,12 +205,12 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return candidate;
   }
 
-  // 6. Find All Feed Posts
+  // 5. Find Feed Posts for Radio Buttons
   function findFeedPosts() {
     var postsSet = [];
 
     function addIfValid(el) {
-      if (el && isValidPostElement(el) && postsSet.indexOf(el) === -1) {
+      if (el && postsSet.indexOf(el) === -1) {
         postsSet.push(el);
       }
     }
@@ -253,165 +218,275 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     var directSelectors = [
       '[data-view-name="feed-full-update"]',
       'div.feed-shared-update-v2',
-      'div[class*="feed-shared-update-v2"]',
+      'div[class*="feed-shared-update"]',
       'div[data-urn*="urn:li:activity"]',
       'div[data-urn*="urn:li:ugcPost"]',
-      'div[data-urn*="urn:li:share"]',
       'div[data-id*="urn:li:activity"]',
-      'div[data-id*="urn:li:ugcPost"]',
-      'div[data-id*="urn:li:share"]',
-      'div[data-activity-urn]',
-      'div[data-entity-urn*="urn:li:activity"]',
-      'div[data-entity-urn*="urn:li:ugcPost"]',
       'article[data-activity-id]',
-      'article[class*="feed-shared-update"]',
-      'div.occludable-update .feed-shared-update-v2',
-      'div[data-chameleon-result-urn]'
+      'article'
     ];
 
     directSelectors.forEach(function(sel) {
       try {
         var elements = document.querySelectorAll(sel);
         for (var i = 0; i < elements.length; i++) {
-          addIfValid(elements[i]);
+          if (elements[i].offsetHeight > 100) {
+            addIfValid(elements[i]);
+          }
         }
       } catch (e) {}
     });
 
-    var feedContainers = document.querySelectorAll(
-      '.scaffold-finite-scroll__content, [data-view-name="scaffold-finite-scroll__content"], main [role="main"]'
-    );
-    for (var c = 0; c < feedContainers.length; c++) {
-      var children = feedContainers[c].children;
-      for (var ch = 0; ch < children.length; ch++) {
-        var child = children[ch];
-        if (child.classList.contains('occludable-update')) {
-          var inner = child.querySelector('.feed-shared-update-v2, [data-view-name="feed-full-update"], [data-urn], [data-id]') || child.firstElementChild || child;
-          addIfValid(inner);
-        } else {
-          addIfValid(child);
-        }
-      }
-    }
-
     var actors = document.querySelectorAll(
-      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="feed-shared-actor"]'
+      '.update-components-actor, [class*="update-components-actor"], .feed-shared-actor, [class*="actor__container"], [class*="actor__title"]'
     );
     for (var a = 0; a < actors.length; a++) {
-      var cardFromActor = climbToPostCard(actors[a]);
-      addIfValid(cardFromActor);
+      var card = findPostCardFromNode(actors[a]);
+      if (card) addIfValid(card);
     }
 
-    var socialBars = document.querySelectorAll(
-      '[data-view-name="feed-social-actions"], .feed-shared-social-action-bar, [class*="feed-shared-social-actions"], [class*="social-actions"]'
+    return postsSet;
+  }
+
+  // 6. Locate the Post Currently Visible on User's Screen
+  function getVisibleFeedPost() {
+    // Priority 1: User explicitly selected post
+    if (state.selectedPostId) {
+      var selectedEl = document.querySelector('[data-jobmail-post-id="' + state.selectedPostId + '"]');
+      if (selectedEl) return selectedEl;
+    }
+
+    var vWidth = window.innerWidth || document.documentElement.clientWidth || 360;
+    var vHeight = window.innerHeight || document.documentElement.clientHeight || 640;
+    var centerX = vWidth / 2;
+
+    // Priority 2: Sample elementFromPoint at center of screen
+    var sampleFractions = [0.45, 0.55, 0.35, 0.65, 0.25, 0.75];
+    for (var i = 0; i < sampleFractions.length; i++) {
+      var y = vHeight * sampleFractions[i];
+      var elAtPoint = document.elementFromPoint(centerX, y);
+      if (elAtPoint) {
+        var card = findPostCardFromNode(elAtPoint);
+        if (card) return card;
+      }
+    }
+
+    // Priority 3: Scan visible actors / cards
+    var signatures = document.querySelectorAll(
+      '[class*="actor"], button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="Follow" i], [class*="update-components-text"], [class*="feed-shared"]'
     );
-    for (var s = 0; s < socialBars.length; s++) {
-      var cardFromSocial = climbToPostCard(socialBars[s]);
-      addIfValid(cardFromSocial);
+    var bestCard = null;
+    var bestDist = Infinity;
+    var vCenter = vHeight / 2;
+
+    signatures.forEach(function(sig) {
+      var rect = sig.getBoundingClientRect();
+      if (rect.bottom > 60 && rect.top < vHeight - 60) {
+        var c = findPostCardFromNode(sig);
+        if (c) {
+          var cRect = c.getBoundingClientRect();
+          var dist = Math.abs((cRect.top + cRect.bottom) / 2 - vCenter);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestCard = c;
+          }
+        }
+      }
+    });
+
+    if (bestCard) return bestCard;
+
+    // Priority 4: Any visible container with text in center
+    var posts = findFeedPosts();
+    if (posts && posts.length > 0) {
+      for (var p = 0; p < posts.length; p++) {
+        var pR = posts[p].getBoundingClientRect();
+        if (pR.bottom > 60 && pR.top < vHeight - 60) {
+          return posts[p];
+        }
+      }
+      return posts[0];
     }
 
-    var menuButtons = document.querySelectorAll(
-      'button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="Control" i], .feed-shared-control-menu'
-    );
-    for (var m = 0; m < menuButtons.length; m++) {
-      var cardFromMenu = climbToPostCard(menuButtons[m]);
-      addIfValid(cardFromMenu);
-    }
+    return null;
+  }
 
-    var finalPosts = [];
-    postsSet.forEach(function(el) {
-      var isOuterWrapper = postsSet.some(function(other) {
-        return other !== el && el.contains(other) && (
-          el.classList.contains('occludable-update') ||
-          el.classList.contains('scaffold-finite-scroll__content') ||
-          el.getAttribute('role') === 'main'
+  // 7. Direct Viewport Text Harvesting (Ultimate Fail-Safe)
+  function extractDirectFromViewport() {
+    var vHeight = window.innerHeight || 640;
+    var visibleText = [];
+    var visiblePhotos = [];
+    var seenText = new Set();
+
+    var allElements = document.querySelectorAll('p, span, h1, h2, h3, h4, div, a');
+    allElements.forEach(function(el) {
+      if (el.children.length > 2) return;
+      var rect = el.getBoundingClientRect();
+      if (rect.bottom > 70 && rect.top < vHeight - 70 && rect.height > 8 && rect.width > 20) {
+        var t = (el.innerText || el.textContent || '').trim();
+        if (t.length > 4 && !seenText.has(t)) {
+          if (!t.includes('JobMail') && !t.includes('ChatGPT') && !t.includes('LinkedIn')) {
+            seenText.add(t);
+            visibleText.push(t);
+          }
+        }
+      }
+    });
+
+    var allImgs = document.querySelectorAll('img');
+    allImgs.forEach(function(img) {
+      var rect = img.getBoundingClientRect();
+      if (rect.bottom > 70 && rect.top < vHeight - 70 && rect.width > 90 && rect.height > 90) {
+        var src = img.currentSrc || img.src;
+        if (src && !src.startsWith('data:') && visiblePhotos.indexOf(src) === -1) {
+          visiblePhotos.push(src);
+        }
+      }
+    });
+
+    var bodyText = visibleText.join('\\n');
+    var fullContent = bodyText + (visiblePhotos.length > 0 ? '\\n\\nAttached Photos (' + visiblePhotos.length + '):\\n' + visiblePhotos.join('\\n') : '');
+
+    return {
+      author: 'LinkedIn Post',
+      headline: '',
+      text: bodyText,
+      photos: visiblePhotos,
+      fullContent: fullContent,
+      postId: 'visible_viewport_' + Date.now()
+    };
+  }
+
+  // 8. Extract Full Content from the Visible Post
+  window.__JOBMAIL_EXTRACT_VISIBLE_POST = function() {
+    var postEl = getVisibleFeedPost();
+    var extractedData = null;
+
+    if (postEl) {
+      // Flash green confirmation highlight
+      postEl.classList.add('jobmail-post-captured');
+      setTimeout(function() {
+        try { postEl.classList.remove('jobmail-post-captured'); } catch(e) {}
+      }, 1500);
+
+      // Expand all 'see more' buttons
+      try {
+        var buttons = postEl.querySelectorAll('button, [role="button"], span');
+        buttons.forEach(function(b) {
+          var bText = (b.innerText || b.textContent || '').trim().toLowerCase();
+          if (bText === '…see more' || bText === 'see more' || bText === '…more' || bText === 'more') {
+            try { b.click(); } catch(e) {}
+          }
+        });
+      } catch(e) {}
+
+      var author = '';
+      var headline = '';
+      var contextHeader = '';
+
+      var headerEl = postEl.querySelector('[class*="header"], [class*="context"]');
+      if (headerEl) {
+        var hText = (headerEl.innerText || '').trim();
+        if (hText.toLowerCase().includes('like') || hText.toLowerCase().includes('comment') || hText.toLowerCase().includes('repost')) {
+          contextHeader = hText;
+        }
+      }
+
+      var authorEl = postEl.querySelector(
+        '.update-components-actor__name, [class*="actor__name"], [class*="actor__title"], h3, h2, a[href*="/in/"]'
+      );
+      if (authorEl) {
+        author = (authorEl.innerText || authorEl.textContent || '').trim();
+      }
+
+      var headlineEl = postEl.querySelector(
+        '.update-components-actor__description, [class*="actor__description"], [class*="actor__headline"], [class*="sub-description"]'
+      );
+      if (headlineEl) {
+        headline = (headlineEl.innerText || headlineEl.textContent || '').trim();
+      }
+
+      var postText = '';
+      var textContainer = postEl.querySelector(
+        '.update-components-text, .feed-shared-update-v2__description-wrapper, [class*="update-components-text"], [class*="commentary"], [data-view-name="feed-update-text"]'
+      );
+      if (textContainer) {
+        postText = (textContainer.innerText || textContainer.textContent || '').trim();
+      }
+
+      if (!postText || postText.length < 20) {
+        var clone = postEl.cloneNode(true);
+        var unwanted = clone.querySelectorAll(
+          'script, style, button, [class*="social"], [class*="action"], .jobmail-radio-container'
         );
+        unwanted.forEach(function(u) { try { u.remove(); } catch(e) {} });
+        postText = (clone.innerText || clone.textContent || '').trim();
+      }
+
+      var photoUrls = [];
+      var images = postEl.querySelectorAll('img');
+      images.forEach(function(img) {
+        var src = img.currentSrc || img.src || img.getAttribute('data-delayed-url');
+        if (src && src.indexOf('data:image') === -1) {
+          var width = img.naturalWidth || img.width || img.offsetWidth;
+          var height = img.naturalHeight || img.height || img.offsetHeight;
+          var isContentImg = (width > 90 && height > 90) ||
+            (img.closest && img.closest('[class*="image"], [class*="media"], [class*="article"], [class*="carousel"]'));
+          if (isContentImg && photoUrls.indexOf(src) === -1) {
+            photoUrls.push(src);
+          }
+        }
       });
-      if (!isOuterWrapper) {
-        finalPosts.push(el);
+
+      var postId = getPostId(postEl);
+
+      var sections = [];
+      if (contextHeader) {
+        sections.push(contextHeader);
       }
+      if (author) {
+        sections.push('Author: ' + author + (headline ? ' (' + headline + ')' : ''));
+      }
+      if (postText) {
+        sections.push('\\n' + postText);
+      }
+      if (photoUrls.length > 0) {
+        sections.push('\\nAttached Photos (' + photoUrls.length + '):\\n' + photoUrls.join('\\n'));
+      }
+
+      var fullContent = sections.join('\\n');
+
+      extractedData = {
+        author: author || 'LinkedIn Post',
+        headline: headline,
+        text: postText,
+        photos: photoUrls,
+        fullContent: fullContent,
+        postId: postId
+      };
+    } else {
+      // Direct viewport harvesting
+      extractedData = extractDirectFromViewport();
+    }
+
+    sendLog('POST_EXTRACTED_SUCCESS', {
+      author: extractedData.author,
+      contentLength: extractedData.fullContent.length,
+      photosCount: extractedData.photos.length
     });
 
-    return finalPosts;
-  }
-
-  // 7. Update Visual States
-  function updateAllVisualStates() {
-    var allContainers = document.querySelectorAll('.jobmail-radio-container');
-    allContainers.forEach(function(container) {
-      var pid = container.getAttribute('data-post-id');
-      var isSelected = (pid && pid === state.selectedPostId && state.selectedPostId !== null);
-
-      var radioBtn = container.querySelector('.jobmail-radio-button');
-      if (radioBtn) {
-        if (isSelected) {
-          radioBtn.classList.add('active');
-          radioBtn.setAttribute('aria-checked', 'true');
-        } else {
-          radioBtn.classList.remove('active');
-          radioBtn.setAttribute('aria-checked', 'false');
-        }
-      }
-
-      var post = container.parentElement;
-      if (post) {
-        if (isSelected) {
-          post.classList.add('jobmail-post-highlight');
-        } else {
-          post.classList.remove('jobmail-post-highlight');
-        }
-      }
-    });
-  }
-
-  // 8. Toggle Selection
-  function togglePostSelection(postId) {
-    if (state.selectedPostId === postId) {
-      state.selectedPostId = null;
-    } else {
-      state.selectedPostId = postId;
+    if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'POST_EXTRACTED',
+        data: extractedData
+      }));
     }
+  };
 
-    updateAllVisualStates();
-
-    try {
-      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'SELECTION_CHANGED',
-          postId: state.selectedPostId,
-          isSelected: state.selectedPostId !== null,
-          timestamp: Date.now()
-        }));
-      }
-    } catch (err) {}
-
-    sendLog('SELECTION_TOGGLED', { selectedPostId: state.selectedPostId });
-  }
-
-  // 9. Synchronize Button State
-  function syncButtonVisualState(post, container, postId) {
-    var isSelected = (postId && postId === state.selectedPostId && state.selectedPostId !== null);
-    if (isSelected) {
-      post.classList.add('jobmail-post-highlight');
-    } else {
-      post.classList.remove('jobmail-post-highlight');
-    }
-
-    var radioBtn = container.querySelector('.jobmail-radio-button');
-    if (radioBtn) {
-      if (isSelected) {
-        radioBtn.classList.add('active');
-        radioBtn.setAttribute('aria-checked', 'true');
-      } else {
-        radioBtn.classList.remove('active');
-        radioBtn.setAttribute('aria-checked', 'false');
-      }
-    }
-  }
-
-  // 10. Inject Radio Button
+  // 9. Radio Button Injection & Setup
   function injectRadioButton(post) {
     var postId = getPostId(post);
+    if (!post.classList) return false;
     post.classList.add('jobmail-post-container');
 
     var computedPos = window.getComputedStyle(post).position;
@@ -419,17 +494,10 @@ export const LINKEDIN_INJECTION_SCRIPT = `
       post.style.position = 'relative';
     }
 
-    var existingContainer = null;
     for (var i = 0; i < post.children.length; i++) {
       if (post.children[i].classList && post.children[i].classList.contains('jobmail-radio-container')) {
-        existingContainer = post.children[i];
-        break;
+        return false;
       }
-    }
-
-    if (existingContainer) {
-      syncButtonVisualState(post, existingContainer, postId);
-      return false;
     }
 
     var container = document.createElement('div');
@@ -437,13 +505,9 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     container.setAttribute('data-post-id', postId);
 
     var menuBtn = post.querySelector(
-      'button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="Control" i], .feed-shared-control-menu, .feed-shared-update-v2__control-menu, button[aria-label*="Dismiss" i]'
+      'button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="Control" i], .feed-shared-control-menu, button[aria-label*="Dismiss" i]'
     );
-    if (menuBtn) {
-      container.style.right = '48px';
-    } else {
-      container.style.right = '12px';
-    }
+    container.style.right = menuBtn ? '48px' : '12px';
 
     var radioBtn = document.createElement('div');
     radioBtn.className = 'jobmail-radio-button';
@@ -454,230 +518,74 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     radioBtn.appendChild(innerDot);
     container.appendChild(radioBtn);
 
-    var isSelected = (postId && postId === state.selectedPostId && state.selectedPostId !== null);
-    if (isSelected) {
-      post.classList.add('jobmail-post-highlight');
-      radioBtn.classList.add('active');
-      radioBtn.setAttribute('aria-checked', 'true');
-    } else {
-      radioBtn.setAttribute('aria-checked', 'false');
-    }
-
     container.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      togglePostSelection(postId);
+      if (state.selectedPostId === postId) {
+        state.selectedPostId = null;
+      } else {
+        state.selectedPostId = postId;
+      }
+      var allContainers = document.querySelectorAll('.jobmail-radio-container');
+      allContainers.forEach(function(c) {
+        var pid = c.getAttribute('data-post-id');
+        var isSel = (pid === state.selectedPostId && state.selectedPostId !== null);
+        var rBtn = c.querySelector('.jobmail-radio-button');
+        if (rBtn) {
+          if (isSel) rBtn.classList.add('active'); else rBtn.classList.remove('active');
+        }
+        if (c.parentElement) {
+          if (isSel) c.parentElement.classList.add('jobmail-post-highlight'); else c.parentElement.classList.remove('jobmail-post-highlight');
+        }
+      });
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'SELECTION_CHANGED',
+          postId: state.selectedPostId,
+          isSelected: state.selectedPostId !== null,
+          timestamp: Date.now()
+        }));
+      }
     }, true);
-
-    container.addEventListener('touchstart', function(e) { e.stopPropagation(); }, { passive: true });
-    container.addEventListener('touchend', function(e) { e.stopPropagation(); }, { passive: true });
 
     post.appendChild(container);
     return true;
   }
 
-  // 11. Main Scan Routine
   function scanAndInjectPosts(reason) {
     injectStyles();
     var posts = findFeedPosts();
-    var newButtonsCount = 0;
-
     posts.forEach(function(post) {
-      var inserted = injectRadioButton(post);
-      if (inserted) {
-        newButtonsCount++;
-      }
+      injectRadioButton(post);
     });
-
-    if (posts.length !== state.lastScannedCount || newButtonsCount > 0) {
+    if (posts.length !== state.lastScannedCount) {
       state.lastScannedCount = posts.length;
       sendLog('POSTS_SCANNED', {
         reason: reason || 'scan',
         postsDetected: posts.length,
-        newButtonsInserted: newButtonsCount,
-        selectedPostId: state.selectedPostId,
         url: window.location.href
       });
     }
   }
 
-  // 12. Find the Post Currently Visible on User's Screen
-  function getVisibleFeedPost() {
-    // If a post is selected, prioritize it
-    if (state.selectedPostId) {
-      var selectedEl = document.querySelector('[data-jobmail-post-id="' + state.selectedPostId + '"]');
-      if (selectedEl) return selectedEl;
-    }
-
-    var posts = findFeedPosts();
-    if (!posts || posts.length === 0) return null;
-
-    var viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-    var viewportCenter = viewportHeight / 2;
-
-    var bestPost = null;
-    var bestDist = Infinity;
-
-    for (var i = 0; i < posts.length; i++) {
-      var rect = posts[i].getBoundingClientRect();
-      // Check if post overlaps viewport
-      if (rect.bottom > 80 && rect.top < viewportHeight - 80) {
-        var postCenter = (rect.top + rect.bottom) / 2;
-        var dist = Math.abs(postCenter - viewportCenter);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestPost = posts[i];
-        }
-      }
-    }
-
-    return bestPost || posts[0] || null;
-  }
-
-  // 13. Extract All Content from the Visible/Selected Post
-  window.__JOBMAIL_EXTRACT_VISIBLE_POST = function() {
-    var postEl = getVisibleFeedPost();
-    if (!postEl) {
-      sendLog('EXTRACT_FAILED', { reason: 'No visible post detected in feed' });
-      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'POST_EXTRACT_ERROR',
-          message: 'No LinkedIn feed post is currently visible on screen. Please scroll to a post and try again.'
-        }));
-      }
-      return;
-    }
-
-    // Flash captured effect on post card
-    postEl.classList.add('jobmail-post-captured');
-    setTimeout(function() {
-      postEl.classList.remove('jobmail-post-captured');
-    }, 1500);
-
-    // 1. Expand all 'see more' buttons to reveal complete text
-    try {
-      var seeMoreButtons = postEl.querySelectorAll(
-        'button[class*="see-more"], button[class*="show-more"], [class*="see-more-btn"], button[aria-label*="see more" i]'
-      );
-      seeMoreButtons.forEach(function(b) {
-        try { b.click(); } catch(e) {}
-      });
-    } catch(e) {}
-
-    // 2. Extract Author & Headline
-    var author = '';
-    var headline = '';
-    var authorEl = postEl.querySelector(
-      '.update-components-actor__name, [class*="actor__name"], .feed-shared-actor__name, [class*="actor__title"], h3, h2, a[href*="/in/"]'
-    );
-    if (authorEl) {
-      author = (authorEl.innerText || authorEl.textContent || '').trim();
-    }
-
-    var headlineEl = postEl.querySelector(
-      '.update-components-actor__description, [class*="actor__description"], .feed-shared-actor__sub-description, [class*="actor__headline"]'
-    );
-    if (headlineEl) {
-      headline = (headlineEl.innerText || headlineEl.textContent || '').trim();
-    }
-
-    // 3. Extract Full Text (both visible & hidden)
-    var postText = '';
-    var textContainer = postEl.querySelector(
-      '.update-components-text, .feed-shared-update-v2__description-wrapper, [class*="update-components-text"], [class*="commentary"], [data-view-name="feed-update-text"]'
-    );
-    if (textContainer) {
-      postText = (textContainer.innerText || textContainer.textContent || '').trim();
-    } else {
-      var clone = postEl.cloneNode(true);
-      var unwanted = clone.querySelectorAll(
-        'script, style, button, [class*="social"], [class*="action"], .jobmail-radio-container'
-      );
-      unwanted.forEach(function(u) { u.remove(); });
-      postText = (clone.innerText || clone.textContent || '').trim();
-    }
-
-    // 4. Extract Photos / Media
-    var photoUrls = [];
-    var images = postEl.querySelectorAll('img');
-    images.forEach(function(img) {
-      var src = img.currentSrc || img.src || img.getAttribute('data-delayed-url');
-      if (src && src.indexOf('data:image') === -1) {
-        var width = img.naturalWidth || img.width || img.offsetWidth;
-        var height = img.naturalHeight || img.height || img.offsetHeight;
-        var isContentImg = (width > 120 && height > 120) ||
-          (img.closest && img.closest('[class*="image"], [class*="media"], [class*="article"], [class*="carousel"]'));
-        if (isContentImg && photoUrls.indexOf(src) === -1) {
-          photoUrls.push(src);
-        }
-      }
-    });
-
-    var postId = getPostId(postEl);
-
-    // Format comprehensive output text for ChatGPT
-    var sections = [];
-    if (author) {
-      sections.push('Author: ' + author + (headline ? ' (' + headline + ')' : ''));
-    }
-    if (postText) {
-      sections.push('\\n' + postText);
-    }
-    if (photoUrls.length > 0) {
-      sections.push('\\nPhotos Attached (' + photoUrls.length + '):\\n' + photoUrls.join('\\n'));
-    }
-
-    var fullContent = sections.join('\\n');
-
-    sendLog('POST_EXTRACTED_SUCCESS', {
-      author: author,
-      hasText: postText.length > 0,
-      photoCount: photoUrls.length,
-      postId: postId
-    });
-
-    if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'POST_EXTRACTED',
-        data: {
-          author: author,
-          headline: headline,
-          text: postText,
-          photos: photoUrls,
-          fullContent: fullContent,
-          postId: postId
-        }
-      }));
-    }
-  };
-
-  // Expose trigger scan globally
   window.__JOBMAIL_TRIGGER_SCAN = function(reason) {
     scanAndInjectPosts(reason);
   };
 
-  // Expose deselect all
   window.__jobmailDeselectAll = function() {
     state.selectedPostId = null;
-    updateAllVisualStates();
-    try {
-      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'SELECTION_CHANGED',
-          postId: null,
-          isSelected: false,
-          timestamp: Date.now()
-        }));
-      }
-    } catch (e) {}
-    sendLog('DESELECT_ALL', {});
+    var allContainers = document.querySelectorAll('.jobmail-radio-container');
+    allContainers.forEach(function(c) {
+      var rBtn = c.querySelector('.jobmail-radio-button');
+      if (rBtn) rBtn.classList.remove('active');
+      if (c.parentElement) c.parentElement.classList.remove('jobmail-post-highlight');
+    });
   };
 
-  // 14. Setup Engine
   function setupEngine() {
     injectStyles();
-    scanAndInjectPosts('initial_setup');
+    scanAndInjectPosts('setup');
 
     var targetNode = document.body || document.documentElement;
     if (!targetNode) {
@@ -690,49 +598,15 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         if (state.scanDebounceTimer) clearTimeout(state.scanDebounceTimer);
         state.scanDebounceTimer = setTimeout(function() {
           scanAndInjectPosts('mutation');
-        }, 80);
+        }, 100);
       });
-
-      state.observer.observe(targetNode, {
-        childList: true,
-        subtree: true
-      });
+      state.observer.observe(targetNode, { childList: true, subtree: true });
     }
 
     if (!state.intervalSet) {
       state.intervalSet = true;
-      setInterval(function() {
-        scanAndInjectPosts('interval');
-      }, 1000);
+      setInterval(function() { scanAndInjectPosts('interval'); }, 1200);
     }
-
-    if (!state.spaHooked && window.history) {
-      state.spaHooked = true;
-      var originalPushState = window.history.pushState;
-      if (originalPushState) {
-        window.history.pushState = function() {
-          var res = originalPushState.apply(this, arguments);
-          setTimeout(function() { scanAndInjectPosts('pushState'); }, 300);
-          return res;
-        };
-      }
-      var originalReplaceState = window.history.replaceState;
-      if (originalReplaceState) {
-        window.history.replaceState = function() {
-          var res = originalReplaceState.apply(this, arguments);
-          setTimeout(function() { scanAndInjectPosts('replaceState'); }, 300);
-          return res;
-        };
-      }
-      window.addEventListener('popstate', function() {
-        setTimeout(function() { scanAndInjectPosts('popstate'); }, 300);
-      });
-    }
-
-    sendLog('INJECTION_READY', {
-      url: window.location.href,
-      readyState: document.readyState
-    });
   }
 
   if (document.readyState === 'loading') {
