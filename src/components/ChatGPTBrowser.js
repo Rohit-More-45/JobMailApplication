@@ -327,11 +327,7 @@ export default function ChatGPTBrowser() {
       if (!data) return;
 
       if (data.type === 'CHATGPT_ATTACH_SUCCESS') {
-        Alert.alert(
-          'Screenshots Attached',
-          `Successfully attached ${data.count || 1} screenshot(s) directly to the ChatGPT composer.`,
-          [{ text: 'OK' }]
-        );
+        // Silently succeeded - images attached directly into composer
       } else if (data.type === 'CHATGPT_ATTACH_RETRY_EXHAUSTED') {
         Alert.alert(
           'Screenshots on Clipboard',
