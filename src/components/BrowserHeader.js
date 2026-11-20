@@ -9,10 +9,7 @@ export default function BrowserHeader({
   onGoBack,
   onReload,
   onGoFeed,
-  onSendToChatGPT,
-  currentUrl = '',
   loading = false,
-  detectedCount = 0,
 }) {
   const insets = useSafeAreaInsets();
   const { isSelected, clearSelection } = useSelection();
@@ -63,33 +60,17 @@ export default function BrowserHeader({
               color={loading ? '#0a66c2' : '#334155'}
             />
           </TouchableOpacity>
-
-          {/* Quick Send to ChatGPT button */}
-          <TouchableOpacity
-            style={styles.sendHeaderBtn}
-            onPress={onSendToChatGPT}
-            accessibilityLabel="Extract and send to ChatGPT"
-          >
-            <Ionicons name="chatbubble-ellipses" size={14} color="#ffffff" />
-            <Text style={styles.sendHeaderBtnText}>ChatGPT</Text>
-          </TouchableOpacity>
         </View>
       </View>
 
-      {/* Selection Status Banner */}
-      <View style={styles.statusRow}>
-        {isSelected ? (
+      {/* Selected Post Status (if user tapped a radio button) */}
+      {isSelected && (
+        <View style={styles.statusRow}>
           <View style={styles.selectionPillActive}>
             <View style={styles.activeDot} />
             <Text style={styles.selectionTextActive} numberOfLines={1}>
               1 Post Selected
             </Text>
-            <TouchableOpacity
-              onPress={onSendToChatGPT}
-              style={styles.sendInlineBtn}
-            >
-              <Text style={styles.sendInlineBtnText}>Send to ChatGPT ➔</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               onPress={clearSelection}
               style={styles.clearButton}
@@ -98,21 +79,8 @@ export default function BrowserHeader({
               <Ionicons name="close-circle" size={16} color="#0a66c2" />
             </TouchableOpacity>
           </View>
-        ) : (
-          <TouchableOpacity
-            style={styles.selectionPillInactive}
-            onPress={onSendToChatGPT}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="arrow-forward-circle" size={16} color="#0a66c2" />
-            <Text style={styles.selectionTextInactive} numberOfLines={1}>
-              {detectedCount > 0
-                ? `${detectedCount} posts ready – 📸 Send Screenshot to ChatGPT ➔`
-                : '📸 Send Screenshot to ChatGPT ➔'}
-            </Text>
-          </TouchableOpacity>
-        )}
-      </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -177,31 +145,17 @@ const styles = StyleSheet.create({
   actionsContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   iconButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: '#f8fafc',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-  },
-  sendHeaderBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#10a37f',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    gap: 4,
-  },
-  sendHeaderBtnText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '700',
   },
   statusRow: {
     marginTop: 6,
@@ -209,20 +163,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   selectionPillActive: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#eff6ff',
     borderWidth: 1,
     borderColor: '#bfdbfe',
-    borderRadius: 20,
-    paddingVertical: 4,
+    borderRadius: 14,
     paddingHorizontal: 10,
+    paddingVertical: 4,
     gap: 6,
   },
   activeDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 4,
     backgroundColor: '#0a66c2',
   },
@@ -231,38 +184,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#0a66c2',
   },
-  sendInlineBtn: {
-    flex: 1,
-    backgroundColor: '#0a66c2',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  sendInlineBtnText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '700',
-  },
   clearButton: {
-    padding: 2,
-  },
-  selectionPillInactive: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 20,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    gap: 6,
-  },
-  selectionTextInactive: {
-    flex: 1,
-    fontSize: 12,
-    color: '#0a66c2',
-    fontWeight: '600',
+    marginLeft: 4,
   },
 });

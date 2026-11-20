@@ -7,23 +7,16 @@ import {
   TouchableOpacity,
   BackHandler,
   Platform,
+  Alert,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import ViewShot, { captureRef } from 'react-native-view-shot';
-import * as Sharing from 'expo-sharing';
 import { LINKEDIN_INJECTION_SCRIPT } from '../scripts/linkedInInjection';
 import { useSelection } from '../context/SelectionContext';
 import BrowserHeader from './BrowserHeader';
 
 const LINKEDIN_FEED_URL = 'https://www.linkedin.com/feed/';
-
-const VIEW_MODES = [
-  { key: 'normal', label: 'Normal', desc: 'Original' },
-  { key: 'compact', label: 'Compact', desc: 'More content' },
-  { key: 'extra_compact', label: 'Extra Compact', desc: 'Max content' },
-];
 
 const CUSTOM_USER_AGENT = Platform.select({
   android:
@@ -37,22 +30,20 @@ export default function LinkedInBrowser() {
   const webViewRef = useRef(null);
   const viewShotRef = useRef(null);
 
-  const { setSelectedPostId, registerWebView, setCapturedContent } = useSelection();
+  const {
+    setSelectedPostId,
+    registerWebView,
+    screenshots,
+    addScreenshot,
+    clearScreenshots,
+  } = useSelection();
 
   const [canGoBack, setCanGoBack] = useState(false);
-  const [currentUrl, setCurrentUrl] = useState(LINKEDIN_FEED_URL);
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [detectedCount, setDetectedCount] = useState(0);
 
-  // Three Viewing Modes: 'normal', 'compact', 'extra_compact'
-  const [viewMode, setViewMode] = useState('compact');
-
-  // Minimize / Maximize floating panel state
-  const [isMinimized, setIsMinimized] = useState(false);
-
-  // Capturing state to temporarily hide overlays during screenshot
+  // Temporarily hide buttons during snapshot capture
   const [isCapturing, setIsCapturing] = useState(false);
 
   // Register WebView ref with context
@@ -62,7 +53,7 @@ export default function LinkedInBrowser() {
     }
   }, [registerWebView]);
 
-  // Android hardware back button handling
+  // Android hardware back button
   useEffect(() => {
     if (Platform.OS !== 'android') return;
 
@@ -81,135 +72,56 @@ export default function LinkedInBrowser() {
     return () => subscription.remove();
   }, [canGoBack]);
 
-  // Apply viewing mode to WebView
-  const applyViewMode = useCallback((mode) => {
-    if (webViewRef.current) {
-      webViewRef.current.injectJavaScript(`
-        if (typeof window.__JOBMAIL_SET_VIEW_MODE === 'function') {
-          window.__JOBMAIL_SET_VIEW_MODE('${mode}');
-        } else if (typeof window.__JOBMAIL_SET_ZOOM === 'function') {
-          window.__JOBMAIL_SET_ZOOM('${mode}');
-        }
-        true;
-      `);
+  // Handle Take Screenshot
+  const handleTakeScreenshot = useCallback(async () => {
+    if (screenshots.length >= 3) {
+      Alert.alert(
+        'Maximum Limit Reached',
+        'Maximum limit of 3 screenshots reached (3/3). Please tap "Clear Screenshots" to capture a new set.',
+        [{ text: 'OK' }]
+      );
+      return;
     }
-  }, []);
 
-  // User changes view mode: persists across browsing
-  const handleSelectViewMode = useCallback(
-    (mode) => {
-      setViewMode(mode);
-      applyViewMode(mode);
-    },
-    [applyViewMode]
-  );
-
-  // Capture Screenshot & Share via Android Native Share Sheet (expo-sharing)
-  // Preserves screenshot as image attachment and allows selecting intended ChatGPT conversation
-  const handleShareToChatGPT = useCallback(async () => {
-    try {
-      setIsCapturing(true);
-
-      // Brief delay to hide overlay controls before taking snapshot
-      await new Promise((resolve) => setTimeout(resolve, 80));
-
-      let fileUri = null;
-      let dataUri = null;
-
-      if (viewShotRef.current) {
-        try {
-          // File URI for native Android Sharing intent
-          fileUri = await captureRef(viewShotRef.current, {
-            format: 'png',
-            quality: 0.92,
-            result: 'tmpfile',
-          });
-
-          // Data URI for in-app context
-          dataUri = await captureRef(viewShotRef.current, {
-            format: 'png',
-            quality: 0.88,
-            result: 'data-uri',
-          });
-        } catch (captureErr) {
-          console.warn('[LinkedInBrowser] captureRef error:', captureErr);
-        }
-      }
-
-      setIsCapturing(false);
-
-      if (dataUri && dataUri.includes(',')) {
-        const shotId = 'shot_' + Date.now();
-        setCapturedContent({
-          screenshotUri: dataUri,
-          screenshotBase64: dataUri.split(',')[1],
-          fileUri: fileUri,
-          postId: shotId,
-        });
-      }
-
-      // Launch Android native Share Sheet
-      if (fileUri) {
-        const canShare = await Sharing.isAvailableAsync();
-        if (canShare) {
-          await Sharing.shareAsync(fileUri, {
-            mimeType: 'image/png',
-            dialogTitle: 'Share Screenshot to ChatGPT',
-            UTI: 'public.png',
-          });
-          return;
-        }
-      }
-
-      // Fallback: navigate to in-app ChatGPT tab if sharing is unavailable
-      router.push('/(tabs)/chatgpt');
-    } catch (e) {
-      console.warn('[LinkedInBrowser] handleShareToChatGPT error:', e);
-      setIsCapturing(false);
-    }
-  }, [setCapturedContent]);
-
-  // Option to open in-app ChatGPT tab directly
-  const handleOpenInAppTab = useCallback(async () => {
     try {
       setIsCapturing(true);
       await new Promise((resolve) => setTimeout(resolve, 80));
 
-      let dataUri = null;
       let fileUri = null;
-
       if (viewShotRef.current) {
-        dataUri = await captureRef(viewShotRef.current, {
-          format: 'png',
-          quality: 0.88,
-          result: 'data-uri',
-        });
         fileUri = await captureRef(viewShotRef.current, {
           format: 'png',
-          quality: 0.90,
+          quality: 0.9,
           result: 'tmpfile',
         });
       }
 
       setIsCapturing(false);
 
-      if (dataUri && dataUri.includes(',')) {
-        const shotId = 'shot_' + Date.now();
-        setCapturedContent({
-          screenshotUri: dataUri,
-          screenshotBase64: dataUri.split(',')[1],
-          fileUri: fileUri,
-          postId: shotId,
-        });
-        router.push('/(tabs)/chatgpt');
+      if (fileUri) {
+        addScreenshot(fileUri);
+        const nextCount = screenshots.length + 1;
+        if (nextCount >= 3) {
+          Alert.alert(
+            'Maximum Limit Reached',
+            'Screenshots: 3/3 captured. You have reached the maximum limit of 3 screenshots.',
+            [{ text: 'OK' }]
+          );
+        }
       }
     } catch (e) {
-      console.warn('[LinkedInBrowser] handleOpenInAppTab error:', e);
+      console.warn('[LinkedInBrowser] handleTakeScreenshot error:', e);
       setIsCapturing(false);
+      Alert.alert('Error', 'Failed to capture screenshot. Please try again.');
     }
-  }, [setCapturedContent]);
+  }, [screenshots.length, addScreenshot]);
 
-  // Handle messages from injected JavaScript
+  // Handle Clear Screenshots
+  const handleClearScreenshots = useCallback(() => {
+    clearScreenshots();
+  }, [clearScreenshots]);
+
+  // Handle messages from injected JavaScript (radio button selection)
   const handleMessage = useCallback(
     (event) => {
       try {
@@ -218,10 +130,6 @@ export default function LinkedInBrowser() {
 
         if (data.type === 'SELECTION_CHANGED') {
           setSelectedPostId(data.postId || null);
-        } else if (data.type === 'DEBUG_LOG') {
-          if (data.subType === 'POSTS_SCANNED' && data.details) {
-            setDetectedCount(data.details.postsDetected || 0);
-          }
         }
       } catch (_err) {
         // Not a JSON message
@@ -230,31 +138,25 @@ export default function LinkedInBrowser() {
     [setSelectedPostId]
   );
 
-  const handleNavigationStateChange = useCallback(
-    (navState) => {
-      setCanGoBack(navState.canGoBack);
-      setCurrentUrl(navState.url);
-      setLoading(navState.loading);
+  const handleNavigationStateChange = useCallback((navState) => {
+    setCanGoBack(navState.canGoBack);
+    setLoading(navState.loading);
 
-      if (!navState.loading && webViewRef.current) {
-        try {
-          webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
-          applyViewMode(viewMode);
-        } catch (_e) {}
-      }
-    },
-    [viewMode, applyViewMode]
-  );
+    if (!navState.loading && webViewRef.current) {
+      try {
+        webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
+      } catch (_e) {}
+    }
+  }, []);
 
   const handleLoadEnd = useCallback(() => {
     setLoading(false);
     if (webViewRef.current) {
       try {
         webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
-        applyViewMode(viewMode);
       } catch (_e) {}
     }
-  }, [viewMode, applyViewMode]);
+  }, []);
 
   const handleReload = useCallback(() => {
     setHasError(false);
@@ -285,23 +187,16 @@ export default function LinkedInBrowser() {
     setErrorMessage(nativeEvent.description || 'Could not load LinkedIn.');
   }, []);
 
-  const currentModeInfo = VIEW_MODES.find((m) => m.key === viewMode) || VIEW_MODES[1];
-
   return (
     <View style={styles.container}>
       {/* Top Header */}
-      {!isCapturing && (
-        <BrowserHeader
-          canGoBack={canGoBack}
-          onGoBack={handleGoBack}
-          onReload={handleReload}
-          onGoFeed={handleGoFeed}
-          onSendToChatGPT={handleShareToChatGPT}
-          currentUrl={currentUrl}
-          loading={loading}
-          detectedCount={detectedCount}
-        />
-      )}
+      <BrowserHeader
+        canGoBack={canGoBack}
+        onGoBack={handleGoBack}
+        onReload={handleReload}
+        onGoFeed={handleGoFeed}
+        loading={loading}
+      />
 
       <View style={styles.webViewContainer}>
         {hasError ? (
@@ -315,7 +210,7 @@ export default function LinkedInBrowser() {
         ) : (
           <ViewShot
             ref={viewShotRef}
-            options={{ format: 'png', quality: 0.92 }}
+            options={{ format: 'png', quality: 0.9 }}
             style={styles.viewShotContainer}
           >
             <WebView
@@ -354,103 +249,58 @@ export default function LinkedInBrowser() {
           </ViewShot>
         )}
 
-        {/* Floating Zoom & Screenshot Controls */}
-        {!isCapturing &&
-          (isMinimized ? (
-            /* Minimized View: Small corner toggle to maximize */
-            <View style={styles.minimizedContainer}>
+        {/* Screenshot Toolbar: Take Screenshot, Clear Screenshots, Counter */}
+        {!isCapturing && (
+          <View style={styles.screenshotBar}>
+            {/* Simple Counter: e.g. Screenshots: 2/3 */}
+            <View style={styles.counterBadge}>
+              <Ionicons name="images-outline" size={15} color="#0a66c2" />
+              <Text style={styles.counterText}>
+                Screenshots: {screenshots.length}/3
+              </Text>
+            </View>
+
+            <View style={styles.buttonRow}>
+              {/* Button 1: Take Screenshot */}
               <TouchableOpacity
-                style={styles.minimizedExpandBtn}
-                onPress={() => setIsMinimized(false)}
-                accessibilityLabel="Show View Mode Controls"
+                style={[
+                  styles.takeScreenshotBtn,
+                  screenshots.length >= 3 && styles.takeScreenshotBtnDisabled,
+                ]}
+                onPress={handleTakeScreenshot}
                 activeOpacity={0.85}
               >
-                <Ionicons name="expand" size={14} color="#38bdf8" />
-                <Text style={styles.minimizedText}>{currentModeInfo.label}</Text>
+                <Ionicons name="camera" size={16} color="#ffffff" />
+                <Text style={styles.takeScreenshotBtnText}>Take Screenshot</Text>
               </TouchableOpacity>
 
+              {/* Button 2: Clear Screenshots */}
               <TouchableOpacity
-                style={styles.minimizedCameraBtn}
-                onPress={handleShareToChatGPT}
-                accessibilityLabel="Share Screenshot to ChatGPT"
+                style={[
+                  styles.clearScreenshotsBtn,
+                  screenshots.length === 0 && styles.clearScreenshotsBtnDisabled,
+                ]}
+                onPress={handleClearScreenshots}
                 activeOpacity={0.85}
+                disabled={screenshots.length === 0}
               >
-                <Ionicons name="share-social" size={20} color="#ffffff" />
+                <Ionicons
+                  name="trash-outline"
+                  size={15}
+                  color={screenshots.length === 0 ? '#94a3b8' : '#ef4444'}
+                />
+                <Text
+                  style={[
+                    styles.clearScreenshotsBtnText,
+                    screenshots.length === 0 && styles.clearScreenshotsBtnTextDisabled,
+                  ]}
+                >
+                  Clear
+                </Text>
               </TouchableOpacity>
             </View>
-          ) : (
-            /* Maximized Floating Toolbar: Three View Modes + Share Actions */
-            <View style={styles.floatingPanel}>
-              {/* Three Viewing Options Selector */}
-              <View style={styles.viewModeHeaderRow}>
-                <View style={styles.viewModeTitleGroup}>
-                  <Ionicons name="resize" size={14} color="#94a3b8" />
-                  <Text style={styles.viewModeSectionTitle}>VIEW MODE</Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.panelMinimizeBtn}
-                  onPress={() => setIsMinimized(true)}
-                  accessibilityLabel="Minimize Panel"
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  <Ionicons name="chevron-down" size={18} color="#94a3b8" />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.segmentedControl}>
-                {VIEW_MODES.map((mode) => {
-                  const isActive = viewMode === mode.key;
-                  return (
-                    <TouchableOpacity
-                      key={mode.key}
-                      style={[
-                        styles.segmentButton,
-                        isActive && styles.segmentButtonActive,
-                      ]}
-                      onPress={() => handleSelectViewMode(mode.key)}
-                      activeOpacity={0.8}
-                    >
-                      <Text
-                        style={[
-                          styles.segmentButtonText,
-                          isActive && styles.segmentButtonTextActive,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {mode.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Action Buttons Row */}
-              <View style={styles.actionRow}>
-                {/* Primary: Share to ChatGPT via Android Native Share Sheet */}
-                <TouchableOpacity
-                  style={styles.primaryShareBtn}
-                  onPress={handleShareToChatGPT}
-                  activeOpacity={0.88}
-                >
-                  <Ionicons name="share-social" size={17} color="#ffffff" />
-                  <Text style={styles.primaryShareBtnText} numberOfLines={1}>
-                    📸 Share to ChatGPT
-                  </Text>
-                </TouchableOpacity>
-
-                {/* Secondary: In-App ChatGPT Tab */}
-                <TouchableOpacity
-                  style={styles.inAppTabBtn}
-                  onPress={handleOpenInAppTab}
-                  activeOpacity={0.85}
-                  accessibilityLabel="Open In-App ChatGPT Tab"
-                >
-                  <Ionicons name="chatbubble-ellipses-outline" size={16} color="#ffffff" />
-                  <Text style={styles.inAppTabBtnText}>In-App</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
+          </View>
+        )}
       </View>
     </View>
   );
@@ -500,189 +350,103 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   errorDescription: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748b',
     textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 20,
+    marginBottom: 16,
+    lineHeight: 18,
   },
   retryButton: {
     backgroundColor: '#0a66c2',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     borderRadius: 8,
   },
   retryButtonText: {
     color: '#ffffff',
-    fontSize: 14,
     fontWeight: '600',
+    fontSize: 14,
   },
-
-  // Floating Panel
-  floatingPanel: {
+  screenshotBar: {
     position: 'absolute',
-    bottom: 12,
-    left: 10,
-    right: 10,
-    backgroundColor: 'rgba(15, 23, 42, 0.96)',
+    bottom: 16,
+    left: 14,
+    right: 14,
+    backgroundColor: '#ffffff',
     borderRadius: 16,
-    padding: 10,
-    gap: 10,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  viewModeHeaderRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  viewModeTitleGroup: {
+  counterBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#f0f7ff',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
     gap: 6,
   },
-  viewModeSectionTitle: {
-    color: '#94a3b8',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  panelMinimizeBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(30, 41, 59, 0.6)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(30, 41, 59, 0.9)',
-    borderRadius: 12,
-    padding: 3,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  segmentButton: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 9,
-  },
-  segmentButtonActive: {
-    backgroundColor: '#0a66c2',
-    shadowColor: '#0a66c2',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  segmentButtonText: {
-    color: '#94a3b8',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  segmentButtonTextActive: {
-    color: '#ffffff',
+  counterText: {
+    fontSize: 13,
     fontWeight: '700',
+    color: '#0a66c2',
   },
-  actionRow: {
+  buttonRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  primaryShareBtn: {
-    flex: 1,
-    height: 44,
-    backgroundColor: '#10a37f',
-    borderRadius: 12,
+  takeScreenshotBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0a66c2',
     paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    elevation: 4,
-    shadowColor: '#10a37f',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
+    paddingVertical: 8,
+    borderRadius: 10,
+    gap: 6,
+    elevation: 2,
   },
-  primaryShareBtnText: {
+  takeScreenshotBtnDisabled: {
+    backgroundColor: '#94a3b8',
+  },
+  takeScreenshotBtnText: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '700',
   },
-  inAppTabBtn: {
-    height: 44,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(30, 41, 59, 0.85)',
-    borderRadius: 12,
+  clearScreenshotsBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
+    backgroundColor: '#fef2f2',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderColor: '#fee2e2',
+    gap: 4,
   },
-  inAppTabBtnText: {
-    color: '#ffffff',
-    fontSize: 12,
+  clearScreenshotsBtnDisabled: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+  },
+  clearScreenshotsBtnText: {
+    color: '#ef4444',
+    fontSize: 13,
     fontWeight: '600',
   },
-
-  // Minimized state
-  minimizedContainer: {
-    position: 'absolute',
-    bottom: 16,
-    right: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  minimizedExpandBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 40,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: '#1e293b',
-    gap: 6,
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-  },
-  minimizedText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  minimizedCameraBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#10a37f',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 6,
-    shadowColor: '#10a37f',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    borderWidth: 2,
-    borderColor: '#ffffff',
+  clearScreenshotsBtnTextDisabled: {
+    color: '#94a3b8',
   },
 });

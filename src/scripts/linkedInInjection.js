@@ -1,12 +1,12 @@
 /**
- * JobMail - LinkedIn Feed Post Detection & Content Extraction Script (v5)
+ * JobMail - LinkedIn Feed Post Detection & Selection Script
  *
- * Designed to reliably:
- * 1. Capture ONLY the main visible post with ZERO noise from adjacent posts or reaction counts.
- * 2. Climb DOM hierarchy to isolate the exact single-post container using single-actor boundaries.
- * 3. Automatically expand all "...see more" buttons to extract all full post text.
- * 4. Extract author, headline, clean body text, and attached photos.
- * 5. Send structured content to React Native via window.ReactNativeWebView.postMessage.
+ * Capabilities:
+ * 1. Post detection & continuous observation via MutationObserver.
+ * 2. Visual radio button support with tap interception and single selection.
+ * 3. Highlights the currently selected post.
+ * 4. Communicates selection state to React Native via window.ReactNativeWebView.postMessage.
+ * 5. Normal mobile LinkedIn browsing experience with zero artificial zooming.
  */
 
 export const LINKEDIN_INJECTION_SCRIPT = `
@@ -21,158 +21,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
   };
 
   var state = window.__JOBMAIL_STATE__;
-
-  // Three Viewing Options: 'normal', 'compact', 'extra_compact'
-  window.__JOBMAIL_SET_VIEW_MODE = function(modeInput) {
-    try {
-      var mode = (modeInput || 'normal').toString().toLowerCase();
-      if (mode === '1' || mode === '1.0' || mode === 'normal') {
-        mode = 'normal';
-      } else if (mode === 'compact' || mode === '0.75' || mode === '0.7' || mode === '0.85') {
-        mode = 'compact';
-      } else if (mode === 'extra_compact' || mode === 'extracompact' || mode === '0.58' || mode === '0.55' || mode === '0.6') {
-        mode = 'extra_compact';
-      }
-
-      window.__JOBMAIL_CURRENT_VIEW_MODE__ = mode;
-
-      var styleId = 'jobmail-vertical-density-style';
-      var styleEl = document.getElementById(styleId);
-      if (!styleEl) {
-        styleEl = document.createElement('style');
-        styleEl.id = styleId;
-        (document.head || document.documentElement).appendChild(styleEl);
-      }
-
-      if (mode === 'normal') {
-        styleEl.textContent = '';
-        return 'normal';
-      }
-
-      var commentaryFontSize = mode === 'extra_compact' ? 10.5 : 12.5;
-      var actorNameFontSize = mode === 'extra_compact' ? 10.5 : 12;
-      var actorSubFontSize = mode === 'extra_compact' ? 9.5 : 10.5;
-      var lineHeight = mode === 'extra_compact' ? '1.15' : '1.25';
-      var verticalPadding = mode === 'extra_compact' ? 3 : 6;
-      var verticalMargin = mode === 'extra_compact' ? 2 : 4;
-      var imgMaxHeight = mode === 'extra_compact' ? 160 : 250;
-      var radioTop = mode === 'extra_compact' ? '6px' : '8px';
-      var radioRight = mode === 'extra_compact' ? '40px' : '44px';
-      var radioScale = mode === 'extra_compact' ? '0.90' : '0.95';
-
-      styleEl.textContent = \`
-        /* 1. Strictly 100% width with ZERO horizontal blank space */
-        html, body {
-          width: 100% !important;
-          max-width: 100% !important;
-          overflow-x: hidden !important;
-          margin: 0 !important;
-          padding: 0 !important;
-        }
-
-        /* 2. Natural text wrapping across the full screen width */
-        p, span, div, h1, h2, h3, h4, a {
-          word-wrap: break-word !important;
-          overflow-wrap: break-word !important;
-          white-space: normal !important;
-        }
-
-        /* 3. Post body commentary text density & vertical compaction */
-        .update-components-text,
-        [class*="update-components-text"],
-        [class*="commentary"],
-        [data-view-name="feed-update-text"],
-        .feed-shared-update-v2__description-wrapper {
-          font-size: \` + commentaryFontSize + \`px !important;
-          line-height: \` + lineHeight + \` !important;
-          margin-top: \` + verticalMargin + \`px !important;
-          margin-bottom: \` + verticalMargin + \`px !important;
-        }
-
-        /* 4. Author and headline header vertical compaction */
-        .update-components-actor__name,
-        [class*="actor__name"],
-        [class*="actor__title"] {
-          font-size: \` + actorNameFontSize + \`px !important;
-          line-height: 1.15 !important;
-        }
-
-        .update-components-actor__description,
-        [class*="actor__description"],
-        [class*="actor__sub-description"] {
-          font-size: \` + actorSubFontSize + \`px !important;
-          line-height: 1.1 !important;
-        }
-
-        /* 5. Post container margins & vertical padding */
-        .feed-shared-update-v2,
-        [data-view-name="feed-full-update"],
-        article,
-        .scaffold-layout__main,
-        .feed-outlet,
-        main,
-        [role="main"] {
-          width: 100% !important;
-          max-width: 100% !important;
-          box-sizing: border-box !important;
-          padding-top: \` + verticalPadding + \`px !important;
-          padding-bottom: \` + verticalPadding + \`px !important;
-          margin-bottom: \` + (verticalMargin * 2) + \`px !important;
-        }
-
-        .update-components-actor,
-        [class*="update-components-actor"],
-        .feed-shared-actor {
-          padding-top: \` + Math.max(2, Math.round(verticalPadding / 2)) + \`px !important;
-          padding-bottom: \` + Math.max(2, Math.round(verticalPadding / 2)) + \`px !important;
-          margin-bottom: \` + verticalMargin + \`px !important;
-        }
-
-        /* 6. Constrain attached photo heights so text fits vertically on screen */
-        .feed-shared-update-v2 img,
-        [data-view-name="feed-full-update"] img,
-        [class*="update-components-image"] img,
-        article img {
-          max-height: \` + imgMaxHeight + \`px !important;
-          width: 100% !important;
-          object-fit: contain !important;
-        }
-
-        /* 7. Ensure radio buttons remain correctly positioned */
-        .jobmail-radio-container {
-          top: \` + radioTop + \` !important;
-          right: \` + radioRight + \` !important;
-          transform: scale(\` + radioScale + \`) !important;
-          transform-origin: top right !important;
-        }
-      \`;
-
-      return mode;
-    } catch(e) {
-      console.warn('[JobMail] Error in view mode adjustment:', e);
-      return 'normal';
-    }
-  };
-
-  // Backwards compatibility alias
-  window.__JOBMAIL_SET_ZOOM = function(densityLevel) {
-    var val = parseFloat(densityLevel) || 1.0;
-    if (val <= 0.65) return window.__JOBMAIL_SET_VIEW_MODE('extra_compact');
-    if (val <= 0.85) return window.__JOBMAIL_SET_VIEW_MODE('compact');
-    return window.__JOBMAIL_SET_VIEW_MODE('normal');
-  };
-
-  function enableUserScalable() {
-    try {
-      var meta = document.querySelector('meta[name="viewport"]');
-      if (!meta) {
-        meta = document.createElement('meta');
-        meta.name = 'viewport';
-        (document.head || document.documentElement).appendChild(meta);
-      }
-      meta.content = 'width=device-width, initial-scale=1.0, minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes';
-    } catch(e) {}
-  }
 
   // 1. Logging Helper
   function sendLog(type, details) {
@@ -191,9 +39,9 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     } catch (e) {}
   }
 
-  // 2. CSS Styles Injection
+  // 2. CSS Styles Injection for Radio Buttons & Selection Highlight
   function injectStyles() {
-    var styleId = 'jobmail-injected-styles-v5';
+    var styleId = 'jobmail-injected-styles-v6';
     var existingStyle = document.getElementById(styleId);
     if (existingStyle) return;
 
@@ -207,14 +55,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         background-color: rgba(10, 102, 194, 0.035) !important;
         box-shadow: 0 4px 16px rgba(10, 102, 194, 0.18) !important;
         transition: outline 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease !important;
-      }
-
-      /* Flash Highlight on Captured Post */
-      .jobmail-post-captured {
-        outline: 3.5px solid #10a37f !important;
-        background-color: rgba(16, 163, 127, 0.08) !important;
-        box-shadow: 0 0 24px rgba(16, 163, 127, 0.35) !important;
-        transition: all 0.3s ease !important;
       }
 
       /* Radio Button Container */
@@ -309,7 +149,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return fallbackId;
   }
 
-  // 4. Find Post Card From Any Node using Single-Actor Boundary Climbing
+  // 4. Find Post Card From Any Node
   function findPostCardFromNode(node) {
     if (!node || node === document.body || node === document.documentElement) return null;
 
@@ -317,7 +157,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     var candidate = null;
 
     while (curr && curr !== document.body && curr !== document.documentElement) {
-      if (curr.classList && (curr.classList.contains('jobmail-radio-container') || curr.id === 'jobmail-injected-styles-v5')) {
+      if (curr.classList && (curr.classList.contains('jobmail-radio-container') || curr.id === 'jobmail-injected-styles-v6')) {
         return null;
       }
 
@@ -340,8 +180,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
           '.update-components-actor, [class*="update-components-actor"], [class*="actor__name"], [class*="actor__title"], .feed-shared-actor'
         );
         if (actorsInParent.length > 1) {
-          // Parent is the feed container holding multiple posts.
-          // Therefore, curr is the exact single post card!
           return curr;
         }
       }
@@ -406,242 +244,7 @@ export const LINKEDIN_INJECTION_SCRIPT = `
     return postsSet;
   }
 
-  // 6. Locate STRICTLY the Main Post Currently Visible on User's Screen (Zero Noise)
-  function getVisibleFeedPost() {
-    // Priority 1: User explicitly selected post via radio button
-    if (state.selectedPostId) {
-      var selectedEl = document.querySelector('[data-jobmail-post-id="' + state.selectedPostId + '"]');
-      if (selectedEl) return selectedEl;
-    }
-
-    var vHeight = window.innerHeight || document.documentElement.clientHeight || 640;
-    var vCenter = vHeight / 2;
-
-    // Priority 2: Find the actor/author header closest to screen vertical center
-    var actors = document.querySelectorAll(
-      '.update-components-actor, [class*="update-components-actor"], [class*="actor__name"], [class*="actor__title"], .feed-shared-actor'
-    );
-    var bestActor = null;
-    var bestDist = Infinity;
-
-    for (var i = 0; i < actors.length; i++) {
-      var rect = actors[i].getBoundingClientRect();
-      if (rect.bottom > 40 && rect.top < vHeight - 40) {
-        var dist = Math.abs((rect.top + rect.bottom) / 2 - vCenter);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestActor = actors[i];
-        }
-      }
-    }
-
-    // Climb from bestActor to the single post card boundary
-    if (bestActor) {
-      var curr = bestActor;
-      var postCard = null;
-      while (curr && curr !== document.body && curr !== document.documentElement) {
-        var parent = curr.parentElement;
-        if (!parent) break;
-
-        var actorsInParent = parent.querySelectorAll(
-          '.update-components-actor, [class*="update-components-actor"], [class*="actor__name"], [class*="actor__title"], .feed-shared-actor'
-        );
-        if (actorsInParent.length > 1) {
-          postCard = curr;
-          break;
-        }
-
-        var vName = curr.getAttribute('data-view-name') || '';
-        var cName = (curr.className || '').toString();
-        var dUrn = curr.getAttribute('data-urn') || '';
-        if (
-          vName === 'feed-full-update' ||
-          cName.indexOf('feed-shared-update') !== -1 ||
-          dUrn.indexOf('urn:li:activity') !== -1 ||
-          curr.tagName.toLowerCase() === 'article'
-        ) {
-          postCard = curr;
-          break;
-        }
-
-        curr = parent;
-      }
-      return postCard || curr || bestActor;
-    }
-
-    // Priority 3: Sample elementFromPoint at center of screen
-    var vWidth = window.innerWidth || 360;
-    var centerX = vWidth / 2;
-    var sampleFractions = [0.5, 0.4, 0.6, 0.3, 0.7];
-    for (var s = 0; s < sampleFractions.length; s++) {
-      var y = vHeight * sampleFractions[s];
-      var elAtPoint = document.elementFromPoint(centerX, y);
-      if (elAtPoint) {
-        var card = findPostCardFromNode(elAtPoint);
-        if (card) return card;
-      }
-    }
-
-    // Priority 4: Any visible feed post
-    var posts = findFeedPosts();
-    for (var p = 0; p < posts.length; p++) {
-      var pR = posts[p].getBoundingClientRect();
-      if (pR.bottom > 80 && pR.top < vHeight - 80) {
-        return posts[p];
-      }
-    }
-    return posts.length > 0 ? posts[0] : null;
-  }
-
-  // 7. Extract Clean Single Post Content (Zero Noise)
-  window.__JOBMAIL_EXTRACT_VISIBLE_POST = function() {
-    var postEl = getVisibleFeedPost();
-    var extractedData = null;
-
-    if (postEl) {
-      // Flash green confirmation highlight
-      postEl.classList.add('jobmail-post-captured');
-      setTimeout(function() {
-        try { postEl.classList.remove('jobmail-post-captured'); } catch(e) {}
-      }, 1500);
-
-      // Expand all 'see more' buttons strictly inside this post
-      try {
-        var buttons = postEl.querySelectorAll('button, [role="button"], span');
-        buttons.forEach(function(b) {
-          var bText = (b.innerText || b.textContent || '').trim().toLowerCase();
-          if (bText === '…see more' || bText === 'see more' || bText === '…more' || bText === 'more') {
-            try { b.click(); } catch(e) {}
-          }
-        });
-      } catch(e) {}
-
-      // Extract Author Name
-      var author = '';
-      var authorEl = postEl.querySelector(
-        '.update-components-actor__name, [class*="actor__name"], [class*="actor__title"], h3, h2, a[href*="/in/"]'
-      );
-      if (authorEl) {
-        author = (authorEl.innerText || authorEl.textContent || '').trim();
-      }
-
-      // Extract Headline / Subtitle
-      var headline = '';
-      var headlineEl = postEl.querySelector(
-        '.update-components-actor__description, [class*="actor__description"], [class*="actor__headline"], [class*="sub-description"]'
-      );
-      if (headlineEl) {
-        headline = (headlineEl.innerText || headlineEl.textContent || '').trim();
-      }
-
-      // Extract Clean Body Text
-      var postText = '';
-      var textContainer = postEl.querySelector(
-        '.update-components-text, [class*="update-components-text"], .feed-shared-update-v2__description-wrapper, [class*="commentary"], [data-view-name="feed-update-text"]'
-      );
-      if (textContainer) {
-        postText = (textContainer.innerText || textContainer.textContent || '').trim();
-      }
-
-      // If text container not found, clone post and strip noise
-      if (!postText || postText.length < 15) {
-        var clone = postEl.cloneNode(true);
-        // Remove noise: buttons, social actions, reaction counts, radio buttons, etc.
-        var noiseSelectors = [
-          'script', 'style', 'button',
-          '[class*="social-counts"]', '[class*="social-details"]', '[class*="reactions"]',
-          '[class*="social-action"]', '[class*="social-bar"]', '[class*="feed-shared-social-action-bar"]',
-          '.jobmail-radio-container',
-          '.update-components-actor', '[class*="update-components-actor"]',
-          '[class*="control-menu"]'
-        ];
-        noiseSelectors.forEach(function(sel) {
-          var els = clone.querySelectorAll(sel);
-          els.forEach(function(el) { try { el.remove(); } catch(e) {} });
-        });
-        postText = (clone.innerText || clone.textContent || '').trim();
-      }
-
-      // Filter out any trailing reaction counts that leaked in
-      postText = postText.replace(/\\b\\d+\\s*(likes?|comments?|reposts?)\\b/gi, '').trim();
-
-      // Extract Photos
-      var photoUrls = [];
-      var images = postEl.querySelectorAll('img');
-      images.forEach(function(img) {
-        if (img.closest && img.closest('[class*="actor"], [class*="avatar"], .feed-shared-actor')) return;
-        var src = img.currentSrc || img.src || img.getAttribute('data-delayed-url');
-        if (src && src.indexOf('data:image') === -1) {
-          var width = img.naturalWidth || img.width || img.offsetWidth;
-          var height = img.naturalHeight || img.height || img.offsetHeight;
-          if (width > 80 && height > 80 && photoUrls.indexOf(src) === -1) {
-            photoUrls.push(src);
-          }
-        }
-      });
-
-      var postId = getPostId(postEl);
-
-      var sections = [];
-      if (author) {
-        sections.push('Author: ' + author + (headline ? ' (' + headline + ')' : ''));
-      }
-      if (postText) {
-        sections.push('\\n' + postText);
-      }
-      if (photoUrls.length > 0) {
-        sections.push('\\nAttached Photos (' + photoUrls.length + '):\\n' + photoUrls.join('\\n'));
-      }
-
-      var fullContent = sections.join('\\n');
-
-      extractedData = {
-        author: author || 'LinkedIn Post',
-        headline: headline,
-        text: postText,
-        photos: photoUrls,
-        fullContent: fullContent,
-        postId: postId
-      };
-    } else {
-      // Fallback: Find largest text container in center
-      var centerBlockText = '';
-      var pTags = document.querySelectorAll('p, div[class*="text"]');
-      pTags.forEach(function(p) {
-        var r = p.getBoundingClientRect();
-        if (r.top > 60 && r.bottom < (window.innerHeight || 640) - 60) {
-          var t = (p.innerText || '').trim();
-          if (t.length > centerBlockText.length && !t.includes('JobMail') && !t.includes('ChatGPT')) {
-            centerBlockText = t;
-          }
-        }
-      });
-
-      extractedData = {
-        author: 'LinkedIn Post',
-        headline: '',
-        text: centerBlockText,
-        photos: [],
-        fullContent: centerBlockText || 'LinkedIn post content',
-        postId: 'visible_post_' + Date.now()
-      };
-    }
-
-    sendLog('POST_EXTRACTED_SUCCESS', {
-      author: extractedData.author,
-      contentLength: extractedData.fullContent.length,
-      photosCount: extractedData.photos.length
-    });
-
-    if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'POST_EXTRACTED',
-        data: extractedData
-      }));
-    }
-  };
-
-  // 8. Radio Button Injection & Setup
+  // 6. Radio Button Injection & Setup
   function injectRadioButton(post) {
     var postId = getPostId(post);
     if (!post.classList) return false;
@@ -742,7 +345,6 @@ export const LINKEDIN_INJECTION_SCRIPT = `
   };
 
   function setupEngine() {
-    enableUserScalable();
     injectStyles();
     scanAndInjectPosts('setup');
 

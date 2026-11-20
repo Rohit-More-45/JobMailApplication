@@ -7,21 +7,14 @@ const SelectionContext = createContext({
   clearSelection: () => {},
   webViewRef: null,
   registerWebView: () => {},
-  capturedContent: null,
-  setCapturedContent: () => {},
-  clearCapturedContent: () => {},
-  pendingPaste: false,
-  markPasteDone: () => {},
-  detectedEmail: null,
-  setDetectedEmail: () => {},
-  clearDetectedEmail: () => {},
+  screenshots: [],
+  addScreenshot: () => {},
+  clearScreenshots: () => {},
 });
 
 export function SelectionProvider({ children }) {
   const [selectedPostId, setSelectedPostId] = useState(null);
-  const [capturedContent, setCapturedContentState] = useState(null);
-  const [pendingPaste, setPendingPaste] = useState(false);
-  const [detectedEmail, setDetectedEmail] = useState(null);
+  const [screenshots, setScreenshots] = useState([]);
   const webViewRef = useRef(null);
 
   const registerWebView = useCallback((ref) => {
@@ -44,22 +37,15 @@ export function SelectionProvider({ children }) {
     }
   }, []);
 
-  const setCapturedContent = useCallback((content) => {
-    setCapturedContentState(content);
-    setPendingPaste(true);
+  const addScreenshot = useCallback((uri) => {
+    setScreenshots((prev) => {
+      if (prev.length >= 3) return prev;
+      return [...prev, uri];
+    });
   }, []);
 
-  const clearCapturedContent = useCallback(() => {
-    setCapturedContentState(null);
-    setPendingPaste(false);
-  }, []);
-
-  const markPasteDone = useCallback(() => {
-    setPendingPaste(false);
-  }, []);
-
-  const clearDetectedEmail = useCallback(() => {
-    setDetectedEmail(null);
+  const clearScreenshots = useCallback(() => {
+    setScreenshots([]);
   }, []);
 
   return (
@@ -71,14 +57,9 @@ export function SelectionProvider({ children }) {
         clearSelection,
         webViewRef,
         registerWebView,
-        capturedContent,
-        setCapturedContent,
-        clearCapturedContent,
-        pendingPaste,
-        markPasteDone,
-        detectedEmail,
-        setDetectedEmail,
-        clearDetectedEmail,
+        screenshots,
+        addScreenshot,
+        clearScreenshots,
       }}
     >
       {children}
