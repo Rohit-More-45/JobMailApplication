@@ -1,6 +1,6 @@
 import React from 'react';
-import PlaceholderScreen from '../../components/PlaceholderScreen';
+import FormAutofillScreen from '../../components/FormAutofillScreen';
 
-export default function PendingScreen2() {
-  return <PlaceholderScreen title="Pending" sectionIndex={3} />;
+export default function AutofillScreen() {
+  return <FormAutofillScreen />;
 }

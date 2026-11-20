@@ -14,12 +14,12 @@ export default function TabsLayout() {
           backgroundColor: '#ffffff',
           borderTopColor: '#e2e8f0',
           borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 88 : 64,
-          paddingBottom: Platform.OS === 'ios' ? 28 : 10,
-          paddingTop: 8,
+          height: Platform.OS === 'ios' ? 80 : 54,
+          paddingBottom: Platform.OS === 'ios' ? 22 : 6,
+          paddingTop: 4,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: '600',
         },
       }}
@@ -32,7 +32,7 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'globe' : 'globe-outline'}
-              size={22}
+              size={20}
               color={color}
             />
           ),
@@ -46,7 +46,7 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
-              size={22}
+              size={20}
               color={focused ? '#10a37f' : color}
             />
           ),
@@ -55,12 +55,12 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="pending2"
         options={{
-          title: 'Pending',
-          tabBarLabel: 'Pending',
+          title: 'Autofill',
+          tabBarLabel: 'Autofill',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
-              name={focused ? 'time' : 'time-outline'}
-              size={22}
+              name={focused ? 'document-text' : 'document-text-outline'}
+              size={20}
               color={color}
             />
           ),
@@ -69,15 +69,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="pending3"
         options={{
-          title: 'Pending',
-          tabBarLabel: 'Pending',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons
-              name={focused ? 'time' : 'time-outline'}
-              size={22}
-              color={color}
-            />
-          ),
+          href: null,
         }}
       />
     </Tabs>

@@ -72,12 +72,12 @@ export default function LinkedInBrowser() {
     return () => subscription.remove();
   }, [canGoBack]);
 
-  // Handle Take Screenshot
+  // Handle Take Screenshot (maximum 3 limit, no counter, no preview)
   const handleTakeScreenshot = useCallback(async () => {
     if (screenshots.length >= 3) {
       Alert.alert(
         'Maximum Limit Reached',
-        'Maximum limit of 3 screenshots reached. Please tap "Clear Screenshots" to capture a new set.',
+        'Maximum limit of 3 screenshots reached. Tap the trash icon to clear screenshots.',
         [{ text: 'OK' }]
       );
       return;
@@ -104,7 +104,7 @@ export default function LinkedInBrowser() {
     } catch (e) {
       console.warn('[LinkedInBrowser] handleTakeScreenshot error:', e);
       setIsCapturing(false);
-      Alert.alert('Error', 'Failed to capture screenshot. Please try again.');
+      Alert.alert('Error', 'Failed to capture screenshot.');
     }
   }, [screenshots.length, addScreenshot]);
 
@@ -220,8 +220,7 @@ export default function LinkedInBrowser() {
               startInLoadingState={true}
               renderLoading={() => (
                 <View style={styles.loadingOverlay}>
-                  <ActivityIndicator size="large" color="#0a66c2" />
-                  <Text style={styles.loadingText}>Loading LinkedIn...</Text>
+                  <ActivityIndicator size="small" color="#0a66c2" />
                 </View>
               )}
               injectedJavaScriptBeforeContentLoaded={LINKEDIN_INJECTION_SCRIPT}
@@ -241,43 +240,40 @@ export default function LinkedInBrowser() {
           </ViewShot>
         )}
 
-        {/* Minimal Screenshot Toolbar: Only Take Screenshot & Clear Screenshots Buttons */}
+        {/* Compact Floating Screenshot Icons: Camera & Trash only */}
         {!isCapturing && (
-          <View style={styles.screenshotBar}>
+          <View style={styles.compactScreenshotDock}>
+            {/* Take Screenshot: Small Camera Icon Only */}
             <TouchableOpacity
               style={[
-                styles.takeScreenshotBtn,
-                screenshots.length >= 3 && styles.takeScreenshotBtnDisabled,
+                styles.iconBtn,
+                styles.cameraBtn,
+                screenshots.length >= 3 && styles.btnDisabled,
               ]}
               onPress={handleTakeScreenshot}
-              activeOpacity={0.85}
+              activeOpacity={0.8}
+              accessibilityLabel="Take Screenshot"
             >
-              <Ionicons name="camera" size={17} color="#ffffff" />
-              <Text style={styles.takeScreenshotBtnText}>Take Screenshot</Text>
+              <Ionicons name="camera" size={18} color="#ffffff" />
             </TouchableOpacity>
 
+            {/* Clear Screenshots: Small Trash Icon Only */}
             <TouchableOpacity
               style={[
-                styles.clearScreenshotsBtn,
-                screenshots.length === 0 && styles.clearScreenshotsBtnDisabled,
+                styles.iconBtn,
+                styles.trashBtn,
+                screenshots.length === 0 && styles.trashBtnDisabled,
               ]}
               onPress={handleClearScreenshots}
-              activeOpacity={0.85}
+              activeOpacity={0.8}
               disabled={screenshots.length === 0}
+              accessibilityLabel="Clear Screenshots"
             >
               <Ionicons
                 name="trash-outline"
-                size={16}
+                size={18}
                 color={screenshots.length === 0 ? '#94a3b8' : '#ef4444'}
               />
-              <Text
-                style={[
-                  styles.clearScreenshotsBtnText,
-                  screenshots.length === 0 && styles.clearScreenshotsBtnTextDisabled,
-                ]}
-              >
-                Clear Screenshots
-              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -309,108 +305,76 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
-  },
-  loadingText: {
-    fontSize: 14,
-    color: '#64748b',
-    fontWeight: '500',
   },
   errorContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    padding: 20,
     backgroundColor: '#ffffff',
   },
   errorTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   errorDescription: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#64748b',
     textAlign: 'center',
-    marginBottom: 16,
-    lineHeight: 18,
+    marginBottom: 14,
   },
   retryButton: {
     backgroundColor: '#0a66c2',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
   },
   retryButtonText: {
     color: '#ffffff',
     fontWeight: '600',
-    fontSize: 14,
+    fontSize: 13,
   },
-  screenshotBar: {
+  compactScreenshotDock: {
     position: 'absolute',
-    bottom: 16,
-    left: 14,
+    bottom: 14,
     right: 14,
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 5,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
+    gap: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 6,
+    shadowRadius: 6,
+    elevation: 5,
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  takeScreenshotBtn: {
-    flex: 1,
-    flexDirection: 'row',
+  iconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0a66c2',
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    gap: 6,
-    elevation: 2,
   },
-  takeScreenshotBtnDisabled: {
+  cameraBtn: {
+    backgroundColor: '#0a66c2',
+  },
+  btnDisabled: {
     backgroundColor: '#94a3b8',
   },
-  takeScreenshotBtnText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  clearScreenshotsBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+  trashBtn: {
     backgroundColor: '#fef2f2',
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#fee2e2',
-    gap: 5,
   },
-  clearScreenshotsBtnDisabled: {
+  trashBtnDisabled: {
     backgroundColor: '#f8fafc',
     borderColor: '#e2e8f0',
-  },
-  clearScreenshotsBtnText: {
-    color: '#ef4444',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  clearScreenshotsBtnTextDisabled: {
-    color: '#94a3b8',
   },
 });
