@@ -17,7 +17,6 @@ import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import * as Sharing from 'expo-sharing';
 import { useSelection } from '../context/SelectionContext';
 import { CHATGPT_INJECTION_SCRIPT } from '../scripts/chatgptInjection';
 
@@ -242,73 +241,48 @@ export default function ChatGPTBrowser() {
     }
   }, [pastedText]);
 
-  const triggerSharingFallback = useCallback(async (uris) => {
-    if (!uris || uris.length === 0) return;
+  // Helper to extract base64 data URL from either a data-uri or file-uri
+  const getBase64FromScreenshot = useCallback(async (item) => {
+    if (!item || typeof item !== 'string') return null;
+    if (item.startsWith('data:')) {
+      return item;
+    }
     try {
-      const isAvailable = await Sharing.isAvailableAsync();
-      Alert.alert(
-        'Attach Screenshots',
-        'Direct web insertion was not accepted by the ChatGPT page. Screenshot has been copied to your clipboard.\n\nWould you like to attach it via Android file sharing?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Attach via Share',
-            onPress: async () => {
-              if (isAvailable && uris[0]) {
-                try {
-                  await Sharing.shareAsync(uris[0], {
-                    mimeType: 'image/png',
-                    dialogTitle: 'Attach Screenshot to ChatGPT',
-                  });
-                } catch (err) {
-                  console.warn('[ChatGPTBrowser] Sharing error:', err);
-                }
-              }
-            },
-          },
-        ]
-      );
-    } catch (_err) {
-      Alert.alert(
-        'Screenshot on Clipboard',
-        'Direct insertion was not accepted. The screenshot has been copied to your clipboard so you can paste it into the composer.',
-        [{ text: 'OK' }]
-      );
+      const res = await fetch(item);
+      const blob = await res.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch (_e) {
+      return null;
     }
   }, []);
 
+  // Handle Paste Screenshots directly into existing ChatGPT WebView
   const handlePasteScreenshots = useCallback(async () => {
     if (!screenshots || screenshots.length === 0) {
       Alert.alert(
         'No Screenshots Available',
-        'No screenshots have been captured yet. Open the browser tab and tap the camera icon to capture up to 3 screenshots.',
+        'No screenshots have been captured yet. Open the LinkedIn or Jobs tab and tap the camera icon to capture up to 3 screenshots.',
         [{ text: 'OK' }]
       );
       return;
     }
 
     try {
-      // 1. Read files into base64 data URLs
-      const dataUrls = [];
-      for (const uri of screenshots) {
-        try {
-          const response = await fetch(uri);
-          const blob = await response.blob();
-          const dataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-          if (dataUrl && typeof dataUrl === 'string') {
-            dataUrls.push(dataUrl);
-          }
-        } catch (readErr) {
-          console.warn('[ChatGPTBrowser] Error reading screenshot URI:', readErr);
+      // 1. Gather all base64 data URLs
+      const base64List = [];
+      for (const item of screenshots) {
+        const b64 = await getBase64FromScreenshot(item);
+        if (b64) {
+          base64List.push(b64);
         }
       }
 
-      if (dataUrls.length === 0) {
+      if (base64List.length === 0) {
         Alert.alert(
           'Screenshot Error',
           'Could not read the stored screenshot files. Please capture a new screenshot.',
@@ -317,111 +291,56 @@ export default function ChatGPTBrowser() {
         return;
       }
 
-      // 2. Copy the primary screenshot to clipboard as a reliable backup
+      // 2. Also copy the primary screenshot to system clipboard
       try {
-        const rawBase64 = dataUrls[0].includes(',')
-          ? dataUrls[0].split(',')[1]
-          : dataUrls[0];
+        const rawBase64 = base64List[0].replace(/^data:image\/\w+;base64,/, '');
         if (rawBase64) {
           await Clipboard.setImageAsync(rawBase64);
         }
       } catch (_clipErr) {
-        console.warn('[ChatGPTBrowser] Clipboard.setImageAsync error:', _clipErr);
+        console.warn('[ChatGPTBrowser] Clipboard copy error:', _clipErr);
       }
 
-      // 3. Inject script into ChatGPT WebView to attach files or simulate paste
+      // 3. Attach directly into ChatGPT web composer inside the existing WebView
       if (webViewRef.current) {
-        const injection = `
-          (async function() {
-            try {
-              const dataUrls = ${JSON.stringify(dataUrls)};
-              var attached = false;
-
-              // Method 1: Find file input
-              var fileInput = document.querySelector('input[type="file"]');
-              if (fileInput) {
-                var dt = new DataTransfer();
-                for (var i = 0; i < dataUrls.length; i++) {
-                  var res = await fetch(dataUrls[i]);
-                  var blob = await res.blob();
-                  var file = new File([blob], 'screenshot_' + (i + 1) + '.png', { type: 'image/png' });
-                  dt.items.add(file);
-                }
-                fileInput.files = dt.files;
-                fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-                fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-                attached = true;
-              }
-
-              // Method 2: Simulate paste on composer
-              var composer = document.querySelector('#prompt-textarea') ||
-                             document.querySelector('div[contenteditable="true"]') ||
-                             document.querySelector('textarea');
-              if (composer) {
-                composer.focus();
-                var dtPaste = new DataTransfer();
-                for (var j = 0; j < dataUrls.length; j++) {
-                  var resP = await fetch(dataUrls[j]);
-                  var blobP = await resP.blob();
-                  var fileP = new File([blobP], 'screenshot_' + (j + 1) + '.png', { type: 'image/png' });
-                  dtPaste.items.add(fileP);
-                }
-                var pasteEvt = new ClipboardEvent('paste', {
-                  clipboardData: dtPaste,
-                  bubbles: true,
-                  cancelable: true
-                });
-                composer.dispatchEvent(pasteEvt);
-                attached = true;
-              }
-
-              if (attached) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'SCREENSHOTS_PASTED_SUCCESS',
-                  count: dataUrls.length
-                }));
-              } else {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'SCREENSHOTS_PASTE_FAILED',
-                  reason: 'No composer input element found'
-                }));
-              }
-            } catch (err) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'SCREENSHOTS_PASTE_FAILED',
-                reason: err.message || 'Injection error'
-              }));
+        const escaped = JSON.stringify(base64List);
+        webViewRef.current.injectJavaScript(`
+          if (typeof window.__JOBMAIL_ATTACH_SCREENSHOTS === 'function') {
+            window.__JOBMAIL_ATTACH_SCREENSHOTS(${escaped});
+          } else {
+            ${CHATGPT_INJECTION_SCRIPT}
+            if (typeof window.__JOBMAIL_ATTACH_SCREENSHOTS === 'function') {
+              window.__JOBMAIL_ATTACH_SCREENSHOTS(${escaped});
             }
-          })();
+          }
           true;
-        `;
-        webViewRef.current.injectJavaScript(injection);
+        `);
       }
     } catch (err) {
       console.warn('[ChatGPTBrowser] handlePasteScreenshots error:', err);
-      triggerSharingFallback(screenshots);
     }
-  }, [screenshots, triggerSharingFallback]);
+  }, [screenshots, getBase64FromScreenshot]);
 
-  const handleMessage = useCallback(
-    (event) => {
-      try {
-        const data = JSON.parse(event.nativeEvent.data);
-        if (!data) return;
+  const handleMessage = useCallback((event) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (!data) return;
 
-        if (data.type === 'SCREENSHOTS_PASTED_SUCCESS') {
-          Alert.alert(
-            'Screenshots Added',
-            `Successfully added ${data.count} screenshot(s) to ChatGPT input. Enter your prompt and send.`,
-            [{ text: 'OK' }]
-          );
-        } else if (data.type === 'SCREENSHOTS_PASTE_FAILED') {
-          triggerSharingFallback(screenshots);
-        }
-      } catch (_e) {}
-    },
-    [screenshots, triggerSharingFallback]
-  );
+      if (data.type === 'CHATGPT_ATTACH_SUCCESS') {
+        Alert.alert(
+          'Screenshots Attached',
+          `Successfully attached ${data.count || 1} screenshot(s) directly to the ChatGPT composer.`,
+          [{ text: 'OK' }]
+        );
+      } else if (data.type === 'CHATGPT_ATTACH_RETRY_EXHAUSTED') {
+        Alert.alert(
+          'Screenshots on Clipboard',
+          'Screenshot is copied to your clipboard. Tap the ChatGPT input box and select Paste.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (_e) {}
+  }, []);
 
   const handleLoadEnd = useCallback(() => {
     setLoading(false);

@@ -111,8 +111,8 @@ export default function LinkedInBrowser() {
       if (viewShotRef.current) {
         fileUri = await captureRef(viewShotRef.current, {
           format: 'png',
-          quality: 0.9,
-          result: 'tmpfile',
+          quality: 0.85,
+          result: 'data-uri',
         });
       }
 
