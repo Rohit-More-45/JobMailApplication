@@ -22,10 +22,20 @@ export const LINKEDIN_INJECTION_SCRIPT = `
 
   var state = window.__JOBMAIL_STATE__;
 
-  // Vertical Content Density Adjustment (NO 2D scaling, natural text wrapping across full screen width)
-  window.__JOBMAIL_SET_ZOOM = function(densityLevel) {
+  // Three Viewing Options: 'normal', 'compact', 'extra_compact'
+  window.__JOBMAIL_SET_VIEW_MODE = function(modeInput) {
     try {
-      var level = parseFloat(densityLevel) || 1.0;
+      var mode = (modeInput || 'normal').toString().toLowerCase();
+      if (mode === '1' || mode === '1.0' || mode === 'normal') {
+        mode = 'normal';
+      } else if (mode === 'compact' || mode === '0.75' || mode === '0.7' || mode === '0.85') {
+        mode = 'compact';
+      } else if (mode === 'extra_compact' || mode === 'extracompact' || mode === '0.58' || mode === '0.55' || mode === '0.6') {
+        mode = 'extra_compact';
+      }
+
+      window.__JOBMAIL_CURRENT_VIEW_MODE__ = mode;
+
       var styleId = 'jobmail-vertical-density-style';
       var styleEl = document.getElementById(styleId);
       if (!styleEl) {
@@ -34,21 +44,21 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         (document.head || document.documentElement).appendChild(styleEl);
       }
 
-      if (Math.abs(level - 1.0) < 0.02) {
-        // Reset to default LinkedIn styling
+      if (mode === 'normal') {
         styleEl.textContent = '';
-        return 1.0;
+        return 'normal';
       }
 
-      // Proportional vertical density metrics:
-      // Smaller level = more content fits vertically on screen
-      var commentaryFontSize = Math.max(9, Math.round(15 * level));
-      var actorNameFontSize = Math.max(10, Math.round(14 * level));
-      var actorSubFontSize = Math.max(9, Math.round(12 * level));
-      var lineHeight = (1.05 + 0.35 * Math.max(0.4, (level - 0.4) / 0.8)).toFixed(2);
-      var verticalPadding = Math.max(2, Math.round(12 * level));
-      var verticalMargin = Math.max(2, Math.round(8 * level));
-      var imgMaxHeight = Math.max(140, Math.round(440 * level));
+      var commentaryFontSize = mode === 'extra_compact' ? 10.5 : 12.5;
+      var actorNameFontSize = mode === 'extra_compact' ? 10.5 : 12;
+      var actorSubFontSize = mode === 'extra_compact' ? 9.5 : 10.5;
+      var lineHeight = mode === 'extra_compact' ? '1.15' : '1.25';
+      var verticalPadding = mode === 'extra_compact' ? 3 : 6;
+      var verticalMargin = mode === 'extra_compact' ? 2 : 4;
+      var imgMaxHeight = mode === 'extra_compact' ? 160 : 250;
+      var radioTop = mode === 'extra_compact' ? '6px' : '8px';
+      var radioRight = mode === 'extra_compact' ? '40px' : '44px';
+      var radioScale = mode === 'extra_compact' ? '0.90' : '0.95';
 
       styleEl.textContent = \`
         /* 1. Strictly 100% width with ZERO horizontal blank space */
@@ -84,14 +94,14 @@ export const LINKEDIN_INJECTION_SCRIPT = `
         [class*="actor__name"],
         [class*="actor__title"] {
           font-size: \` + actorNameFontSize + \`px !important;
-          line-height: 1.2 !important;
+          line-height: 1.15 !important;
         }
 
         .update-components-actor__description,
         [class*="actor__description"],
         [class*="actor__sub-description"] {
           font-size: \` + actorSubFontSize + \`px !important;
-          line-height: 1.15 !important;
+          line-height: 1.1 !important;
         }
 
         /* 5. Post container margins & vertical padding */
@@ -127,13 +137,29 @@ export const LINKEDIN_INJECTION_SCRIPT = `
           width: 100% !important;
           object-fit: contain !important;
         }
+
+        /* 7. Ensure radio buttons remain correctly positioned */
+        .jobmail-radio-container {
+          top: \` + radioTop + \` !important;
+          right: \` + radioRight + \` !important;
+          transform: scale(\` + radioScale + \`) !important;
+          transform-origin: top right !important;
+        }
       \`;
 
-      return level;
+      return mode;
     } catch(e) {
-      console.warn('[JobMail] Error in vertical density adjustment:', e);
-      return 1.0;
+      console.warn('[JobMail] Error in view mode adjustment:', e);
+      return 'normal';
     }
+  };
+
+  // Backwards compatibility alias
+  window.__JOBMAIL_SET_ZOOM = function(densityLevel) {
+    var val = parseFloat(densityLevel) || 1.0;
+    if (val <= 0.65) return window.__JOBMAIL_SET_VIEW_MODE('extra_compact');
+    if (val <= 0.85) return window.__JOBMAIL_SET_VIEW_MODE('compact');
+    return window.__JOBMAIL_SET_VIEW_MODE('normal');
   };
 
   function enableUserScalable() {

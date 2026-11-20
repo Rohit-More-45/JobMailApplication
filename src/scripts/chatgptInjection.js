@@ -397,44 +397,30 @@ export const CHATGPT_INJECTION_SCRIPT = `
     if (!text) return null;
 
     // Clean code blocks, bold, and italic markers
-    var cleaned = text.replace(/\`\`\`[\\s\\S]*?\`\`\`/g, function(match) {
-      return match.replace(/\`\`\`[a-z]*\\n?/gi, '').replace(/\`\`\`/g, '');
-    });
+    var cleaned = text.replace(/\`\`\`[a-z]*\\n?/gi, '').replace(/\`\`\`/g, '');
     cleaned = cleaned.replace(/\\*\\*/g, '').replace(/__/g, '');
 
-    // 1. Recipient Address: 'mail adress :', 'mail address :', 'email :', 'to :'
-    var addrMatch = cleaned.match(/(?:^|\\n)\\s*(?:mail\\s*add?ress|email|to)\\s*:\\s*([^\\r\\n]+)/i);
+    // 1. Recipient Address: MAIL ADDRESS: ...
+    var addrMatch = cleaned.match(/(?:^|\\n)\\s*MAIL\\s*ADD?RESS\\s*:\\s*([^\\r\\n]+)/i);
+    var rawAddress = addrMatch ? addrMatch[1].trim() : '';
 
-    // 2. Subject: 'subject :'
-    var subjMatch = cleaned.match(/(?:^|\\n)\\s*subject\\s*:\\s*([^\\r\\n]+)/i);
-
-    // 3. Body: from 'mail :' to end (or from subject line if no mail label)
-    var bodyMatch = cleaned.match(/(?:^|\\n)\\s*(?:mail(?!\\s*add?ress)|body|content|message)\\s*:\\s*([\\s\\S]*)$/i);
-
-    var address = addrMatch ? addrMatch[1].trim() : '';
-    var subject = subjMatch ? subjMatch[1].trim() : '';
-    var body = '';
-
-    if (bodyMatch) {
-      body = bodyMatch[1].trim();
-    } else if (subjMatch) {
-      var subjIdx = cleaned.indexOf(subjMatch[0]);
-      if (subjIdx !== -1) {
-        body = cleaned.substring(subjIdx + subjMatch[0].length).trim();
-      }
-    }
-
-    // Extract pure email address if found within the address string
+    // Extract pure email address
     var emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/;
-    var emailInAddr = address.match(emailRegex);
-    if (emailInAddr) {
-      address = emailInAddr[1];
-    }
+    var emailInAddr = rawAddress.match(emailRegex);
+    var validEmail = emailInAddr ? emailInAddr[1] : '';
+
+    // 2. Subject: SUBJECT: ...
+    var subjMatch = cleaned.match(/(?:^|\\n)\\s*SUBJECT\\s*:\\s*([^\\r\\n]+)/i);
+    var subject = subjMatch ? subjMatch[1].trim() : '';
+
+    // 3. Body: MAIL: ... (everything after MAIL:)
+    var bodyMatch = cleaned.match(/(?:^|\\n)\\s*MAIL\\s*:\\s*([\\s\\S]*)$/i);
+    var body = bodyMatch ? bodyMatch[1].trim() : '';
 
     if (body) {
       // Remove accidental repeats of header fields
-      body = body.replace(/(?:^|\\n)\\s*(?:mail\\s*add?ress|email|to)\\s*:\\s*[^\\r\\n]+/gi, '');
-      body = body.replace(/(?:^|\\n)\\s*subject\\s*:\\s*[^\\r\\n]+/gi, '');
+      body = body.replace(/(?:^|\\n)\\s*MAIL\\s*ADD?RESS\\s*:\\s*[^\\r\\n]+/gi, '');
+      body = body.replace(/(?:^|\\n)\\s*SUBJECT\\s*:\\s*[^\\r\\n]+/gi, '');
 
       // Strip trailing horizontal dividers and assistant conversational chatter/notes
       var cutoffs = [
@@ -451,10 +437,12 @@ export const CHATGPT_INJECTION_SCRIPT = `
       body = body.trim();
     }
 
-    if (!body && !subject) return null;
+    if (!body && !subject && !rawAddress) return null;
 
     return {
-      address: address,
+      isValid: !!validEmail,
+      address: validEmail,
+      rawAddress: rawAddress,
       subject: subject,
       body: body
     };
@@ -594,7 +582,9 @@ export const CHATGPT_INJECTION_SCRIPT = `
           window.ReactNativeWebView.postMessage(JSON.stringify({
             type: 'CHATGPT_EMAIL_DETECTED',
             data: {
+              isValid: parsed.isValid,
               address: parsed.address,
+              rawAddress: parsed.rawAddress,
               subject: parsed.subject,
               body: parsed.body,
               timestamp: Date.now()

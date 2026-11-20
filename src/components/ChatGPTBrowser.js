@@ -22,6 +22,13 @@ import { useSelection } from '../context/SelectionContext';
 
 const CHATGPT_URL = 'https://chatgpt.com';
 
+const REQUIRED_PROMPT_TEMPLATE = `Analyze this job post screenshot and write an email application using this exact format:
+
+MAIL ADDRESS: recipient@example.com
+SUBJECT: Email subject here
+MAIL:
+Complete email body here.`;
+
 function sanitizeBody(body) {
   if (!body) return '';
   let cleaned = body;
@@ -35,6 +42,42 @@ function sanitizeBody(body) {
     cleaned = cleaned.replace(c, '');
   }
   return cleaned.trim();
+}
+
+// Parses text in the required three-field format
+function parseEmailFromText(text) {
+  if (!text) return null;
+
+  const cleaned = text.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').replace(/\*\*/g, '').replace(/__/g, '');
+
+  const addrMatch = cleaned.match(/(?:^|\n)\s*MAIL\s*ADD?RESS\s*:\s*([^\r\n]+)/i);
+  const rawAddress = addrMatch ? addrMatch[1].trim() : '';
+
+  const emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
+  const emailInAddr = rawAddress.match(emailRegex);
+  const validEmail = emailInAddr ? emailInAddr[1] : '';
+
+  const subjMatch = cleaned.match(/(?:^|\n)\s*SUBJECT\s*:\s*([^\r\n]+)/i);
+  const subject = subjMatch ? subjMatch[1].trim() : '';
+
+  const bodyMatch = cleaned.match(/(?:^|\n)\s*MAIL\s*:\s*([\s\S]*)$/i);
+  let body = bodyMatch ? bodyMatch[1].trim() : '';
+
+  if (body) {
+    body = body.replace(/(?:^|\n)\s*MAIL\s*ADD?RESS\s*:\s*[^\r\n]+/gi, '');
+    body = body.replace(/(?:^|\n)\s*SUBJECT\s*:\s*[^\r\n]+/gi, '');
+    body = sanitizeBody(body);
+  }
+
+  if (!body && !subject && !rawAddress) return null;
+
+  return {
+    isValid: !!validEmail,
+    address: validEmail,
+    rawAddress: rawAddress,
+    subject: subject,
+    body: body,
+  };
 }
 
 const CHATGPT_USER_AGENT = Platform.select({
@@ -67,6 +110,7 @@ export default function ChatGPTBrowser() {
   const [emailModalVisible, setEmailModalVisible] = useState(false);
   const [pinnedTitle, setPinnedTitle] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [promptCopiedFeedback, setPromptCopiedFeedback] = useState(false);
   const [gmailOpening, setGmailOpening] = useState(false);
 
   // Hardware back button on Android
@@ -93,14 +137,25 @@ export default function ChatGPTBrowser() {
     return () => sub.remove();
   }, [canGoBack, previewModalVisible, emailModalVisible]);
 
-  // Open Gmail with pre-filled To, Subject, and Body
+  // Open Gmail with pre-filled To, Subject, and Body (strictly with validation)
   const openGmail = useCallback(async (emailData) => {
-    if (!emailData) return;
+    if (!emailData) return false;
 
-    const rawAddr = (emailData.address || '').trim();
-    // Validate if rawAddr contains a valid email address
-    const emailMatch = rawAddr.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-    const cleanAddr = emailMatch ? emailMatch[0] : '';
+    const rawAddr = (emailData.address || emailData.rawAddress || '').trim();
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    const isValid = emailRegex.test(rawAddr);
+
+    // Requirement: If the recipient address is missing or invalid, show an error instead of opening an incorrectly addressed email.
+    if (!isValid) {
+      Alert.alert(
+        'Invalid Recipient Email',
+        rawAddr
+          ? `The recipient address "${rawAddr}" is not a valid email address. Please make sure ChatGPT includes a valid email address in the "MAIL ADDRESS:" field.`
+          : 'No recipient email address was found in the ChatGPT reply. Please ensure the reply includes "MAIL ADDRESS: recipient@example.com".',
+        [{ text: 'OK' }]
+      );
+      return false;
+    }
 
     const parts = [];
     if (emailData.subject) {
@@ -112,7 +167,7 @@ export default function ChatGPTBrowser() {
     }
 
     const query = parts.length > 0 ? `?${parts.join('&')}` : '';
-    const mailtoUrl = `mailto:${cleanAddr}${query}`;
+    const mailtoUrl = `mailto:${rawAddr}${query}`;
 
     try {
       setGmailOpening(true);
@@ -123,8 +178,8 @@ export default function ChatGPTBrowser() {
       console.warn('[ChatGPTBrowser] openGmail error:', err);
       setGmailOpening(false);
       Alert.alert(
-        'Open in Gmail',
-        'Could not open your email app automatically. You can copy the email text using the "Copy" button below and paste it directly into Gmail.',
+        'Could Not Open Gmail',
+        'Unable to open your email client automatically. You can copy the email text using the "Copy" button below and paste it directly into Gmail.',
         [{ text: 'OK' }]
       );
       return false;
@@ -132,37 +187,40 @@ export default function ChatGPTBrowser() {
   }, []);
 
   // Execute attaching EXACTLY ONE screenshot into ChatGPT
-  const triggerAttach = useCallback((force = false) => {
-    if (!capturedContent || !capturedContent.screenshotBase64 || !webViewRef.current) return;
+  const triggerAttach = useCallback(
+    (force = false) => {
+      if (!capturedContent || !capturedContent.screenshotBase64 || !webViewRef.current) return;
 
-    const postId = capturedContent.postId || 'post_' + Date.now();
+      const postId = capturedContent.postId || 'post_' + Date.now();
 
-    // Prevent duplicate attachment of the same screenshot
-    if (!force && attachedPostIdsRef.current.has(postId)) {
-      return;
-    }
-
-    // Synchronously record as attached to prevent race conditions
-    attachedPostIdsRef.current.add(postId);
-    markPasteDone();
-
-    const base64Img = capturedContent.screenshotBase64;
-    const escapedBase64 = JSON.stringify(base64Img);
-    const escapedPostId = JSON.stringify(postId);
-
-    webViewRef.current.injectJavaScript(`
-      if (window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY) {
-        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${escapedPostId}, ${force ? 'true' : 'false'});
-      } else {
-        ${CHATGPT_INJECTION_SCRIPT}
-        window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${escapedPostId}, ${force ? 'true' : 'false'});
+      // Prevent duplicate attachment of the same screenshot
+      if (!force && attachedPostIdsRef.current.has(postId)) {
+        return;
       }
-      true;
-    `);
 
-    setAttachStatus(true);
-    setTimeout(() => setAttachStatus(false), 4000);
-  }, [capturedContent, markPasteDone]);
+      // Synchronously record as attached to prevent race conditions
+      attachedPostIdsRef.current.add(postId);
+      markPasteDone();
+
+      const base64Img = capturedContent.screenshotBase64;
+      const escapedBase64 = JSON.stringify(base64Img);
+      const escapedPostId = JSON.stringify(postId);
+
+      webViewRef.current.injectJavaScript(`
+        if (window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY) {
+          window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${escapedPostId}, ${force ? 'true' : 'false'});
+        } else {
+          ${CHATGPT_INJECTION_SCRIPT}
+          window.__JOBMAIL_ATTACH_SCREENSHOT_ONLY(${escapedBase64}, ${escapedPostId}, ${force ? 'true' : 'false'});
+        }
+        true;
+      `);
+
+      setAttachStatus(true);
+      setTimeout(() => setAttachStatus(false), 4000);
+    },
+    [capturedContent, markPasteDone]
+  );
 
   // Automatically trigger screenshot attach once when ready
   useEffect(() => {
@@ -190,37 +248,52 @@ export default function ChatGPTBrowser() {
   }, []);
 
   // Handle messages from ChatGPT injected script
-  const handleMessage = useCallback((event) => {
-    try {
-      const data = JSON.parse(event.nativeEvent.data);
-      if (!data) return;
+  const handleMessage = useCallback(
+    (event) => {
+      try {
+        const data = JSON.parse(event.nativeEvent.data);
+        if (!data) return;
 
-      if (data.type === 'CHATGPT_ATTACH_SUCCESS') {
-        setAttachStatus(true);
-      } else if (data.type === 'CHATGPT_FIRST_PINNED_FOUND') {
-        if (data.title) setPinnedTitle(data.title);
-      } else if (data.type === 'CHATGPT_EMAIL_DETECTED') {
-        if (data.data) {
-          const sanitized = {
-            ...data.data,
-            body: sanitizeBody(data.data.body),
-          };
-          setDetectedEmail(sanitized);
-          // Automatically open Gmail with strictly the last response's email details
-          openGmail(sanitized);
+        if (data.type === 'CHATGPT_ATTACH_SUCCESS') {
+          setAttachStatus(true);
+        } else if (data.type === 'CHATGPT_FIRST_PINNED_FOUND') {
+          if (data.title) setPinnedTitle(data.title);
+        } else if (data.type === 'CHATGPT_EMAIL_DETECTED') {
+          if (data.data) {
+            const sanitized = {
+              ...data.data,
+              body: sanitizeBody(data.data.body),
+            };
+            setDetectedEmail(sanitized);
+
+            // Automatically open Gmail if the extracted recipient address is valid
+            if (sanitized.isValid) {
+              openGmail(sanitized);
+            } else {
+              // Show error alert if recipient address is missing or invalid
+              Alert.alert(
+                'Invalid Recipient Email',
+                sanitized.rawAddress
+                  ? `The recipient address "${sanitized.rawAddress}" is not a valid email address. Please make sure ChatGPT includes a valid email in the "MAIL ADDRESS:" field.`
+                  : 'No recipient email address was found in the ChatGPT reply. Please ensure the reply includes "MAIL ADDRESS: recipient@example.com".',
+                [{ text: 'OK' }]
+              );
+            }
+          }
+        } else if (data.type === 'CHATGPT_OPEN_GMAIL') {
+          if (data.data) {
+            const sanitized = {
+              ...data.data,
+              body: sanitizeBody(data.data.body),
+            };
+            setDetectedEmail(sanitized);
+            openGmail(sanitized);
+          }
         }
-      } else if (data.type === 'CHATGPT_OPEN_GMAIL') {
-        if (data.data) {
-          const sanitized = {
-            ...data.data,
-            body: sanitizeBody(data.data.body),
-          };
-          setDetectedEmail(sanitized);
-          openGmail(sanitized);
-        }
-      }
-    } catch (_e) {}
-  }, [setDetectedEmail, openGmail]);
+      } catch (_e) {}
+    },
+    [setDetectedEmail, openGmail]
+  );
 
   // Manual trigger to scan page for drafted email
   const handleScanForEmail = useCallback(() => {
@@ -234,14 +307,55 @@ export default function ChatGPTBrowser() {
     }
   }, []);
 
+  // Copy prompt template to clipboard
+  const handleCopyPromptTemplate = useCallback(async () => {
+    await Clipboard.setStringAsync(REQUIRED_PROMPT_TEMPLATE);
+    setPromptCopiedFeedback(true);
+    setTimeout(() => setPromptCopiedFeedback(false), 2500);
+    Alert.alert(
+      'Prompt Template Copied!',
+      'The required ChatGPT response format has been copied to your clipboard. Paste it into your message prompt in ChatGPT.',
+      [{ text: 'OK' }]
+    );
+  }, []);
+
+  // Paste reply from clipboard and open Gmail (useful when using external ChatGPT app)
+  const handlePasteAndOpenGmail = useCallback(async () => {
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (!text || text.trim().length === 0) {
+        Alert.alert(
+          'Clipboard Empty',
+          'Please copy the email reply from ChatGPT first, then tap here to open Gmail.'
+        );
+        return;
+      }
+
+      const parsed = parseEmailFromText(text);
+      if (!parsed || (!parsed.body && !parsed.subject)) {
+        Alert.alert(
+          'Unrecognized Format',
+          'The copied text does not match the required format:\n\nMAIL ADDRESS: recipient@example.com\nSUBJECT: Subject line\nMAIL:\nBody text',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      setDetectedEmail(parsed);
+      openGmail(parsed);
+    } catch (err) {
+      console.warn('[ChatGPTBrowser] handlePasteAndOpenGmail error:', err);
+    }
+  }, [openGmail, setDetectedEmail]);
+
   // Copy full drafted email to clipboard
   const handleCopyEmail = useCallback(async () => {
     if (!detectedEmail) return;
     const cleanBody = sanitizeBody(detectedEmail.body);
     const fullText = [
-      `To: ${detectedEmail.address || ''}`,
-      `Subject: ${detectedEmail.subject || ''}`,
-      '',
+      `MAIL ADDRESS: ${detectedEmail.address || detectedEmail.rawAddress || ''}`,
+      `SUBJECT: ${detectedEmail.subject || ''}`,
+      'MAIL:',
       cleanBody,
     ].join('\n');
 
@@ -276,7 +390,7 @@ export default function ChatGPTBrowser() {
             accessibilityLabel="Scan for Email"
           >
             <Ionicons name="mail-unread-outline" size={16} color="#ea4335" />
-            <Text style={styles.scanEmailHeaderText}>Scan Email</Text>
+            <Text style={styles.scanEmailHeaderText}>Scan</Text>
           </TouchableOpacity>
 
           {canGoBack && (
@@ -297,6 +411,35 @@ export default function ChatGPTBrowser() {
             <Ionicons name={loading ? 'sync' : 'reload'} size={18} color="#334155" />
           </TouchableOpacity>
         </View>
+      </View>
+
+      {/* Helper Bar for Prompt Template & Quick Paste */}
+      <View style={styles.helperBar}>
+        <TouchableOpacity
+          style={styles.helperPill}
+          onPress={handleCopyPromptTemplate}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={promptCopiedFeedback ? 'checkmark' : 'copy-outline'}
+            size={12}
+            color="#0284c7"
+          />
+          <Text style={styles.helperPillText}>
+            {promptCopiedFeedback ? 'Copied Prompt Format!' : 'Copy Prompt Format'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.helperPill, styles.helperPillGmail]}
+          onPress={handlePasteAndOpenGmail}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="paper-plane" size={12} color="#ea4335" />
+          <Text style={[styles.helperPillText, styles.helperPillGmailText]}>
+            Paste Reply ➔ Gmail
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Captured Screenshot Preview Banner */}
@@ -326,7 +469,9 @@ export default function ChatGPTBrowser() {
               <Text style={styles.bannerStatus} numberOfLines={1}>
                 {attachStatus
                   ? '✓ Attached to First Pinned Chat'
-                  : (pinnedTitle ? `Target: Pinned "${pinnedTitle}"` : 'Posting to First Pinned Chat')}
+                  : pinnedTitle
+                  ? `Target: Pinned "${pinnedTitle}"`
+                  : 'Posting to First Pinned Chat'}
               </Text>
             </View>
           </View>
@@ -421,18 +566,32 @@ export default function ChatGPTBrowser() {
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={styles.emailModalScroll} contentContainerStyle={{ paddingBottom: 16 }}>
-                <Text style={styles.emailModalLabel}>TO / RECIPIENT</Text>
-                <Text style={styles.emailModalValue}>
-                  {detectedEmail.address || '(Not found - specify manually in Gmail)'}
+              <ScrollView
+                style={styles.emailModalScroll}
+                contentContainerStyle={{ paddingBottom: 16 }}
+              >
+                <Text style={styles.emailModalLabel}>MAIL ADDRESS (TO)</Text>
+                <Text
+                  style={[
+                    styles.emailModalValue,
+                    !detectedEmail.isValid && styles.emailModalValueInvalid,
+                  ]}
+                >
+                  {detectedEmail.address ||
+                    detectedEmail.rawAddress ||
+                    '(Missing - invalid recipient)'}
                 </Text>
 
                 <Text style={styles.emailModalLabel}>SUBJECT</Text>
-                <Text style={styles.emailModalValue}>{detectedEmail.subject || '(No subject)'}</Text>
+                <Text style={styles.emailModalValue}>
+                  {detectedEmail.subject || '(No subject)'}
+                </Text>
 
-                <Text style={styles.emailModalLabel}>MESSAGE BODY</Text>
+                <Text style={styles.emailModalLabel}>MAIL (BODY)</Text>
                 <View style={styles.emailModalBodyContainer}>
-                  <Text style={styles.emailModalBody}>{detectedEmail.body || '(No body text)'}</Text>
+                  <Text style={styles.emailModalBody}>
+                    {detectedEmail.body || '(No body text)'}
+                  </Text>
                 </View>
               </ScrollView>
 
@@ -441,14 +600,21 @@ export default function ChatGPTBrowser() {
                   style={styles.modalCopyBtn}
                   onPress={handleCopyEmail}
                 >
-                  <Ionicons name={copyFeedback ? 'checkmark' : 'copy-outline'} size={16} color="#334155" />
+                  <Ionicons
+                    name={copyFeedback ? 'checkmark' : 'copy-outline'}
+                    size={16}
+                    color="#334155"
+                  />
                   <Text style={styles.modalCopyBtnText}>
                     {copyFeedback ? 'Copied!' : 'Copy All'}
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.modalOpenGmailBtn}
+                  style={[
+                    styles.modalOpenGmailBtn,
+                    !detectedEmail.isValid && styles.modalOpenGmailBtnDisabled,
+                  ]}
                   onPress={() => {
                     setEmailModalVisible(false);
                     openGmail(detectedEmail);
@@ -500,6 +666,15 @@ export default function ChatGPTBrowser() {
                   <Ionicons name="mail" size={13} color="#ffffff" />
                 </View>
                 <Text style={styles.emailCardTitle}>Gmail Draft Ready</Text>
+                {detectedEmail.isValid ? (
+                  <View style={styles.validBadge}>
+                    <Text style={styles.validBadgeText}>Valid Email</Text>
+                  </View>
+                ) : (
+                  <View style={styles.invalidBadge}>
+                    <Text style={styles.invalidBadgeText}>Address Missing/Invalid</Text>
+                  </View>
+                )}
               </View>
               <TouchableOpacity
                 onPress={clearDetectedEmail}
@@ -513,8 +688,15 @@ export default function ChatGPTBrowser() {
             <View style={styles.emailCardFields}>
               <Text style={styles.emailCardLine} numberOfLines={1}>
                 <Text style={styles.emailCardFieldLabel}>To: </Text>
-                <Text style={styles.emailCardFieldValue}>
-                  {detectedEmail.address || 'Specify in Gmail'}
+                <Text
+                  style={[
+                    styles.emailCardFieldValue,
+                    !detectedEmail.isValid && styles.emailCardFieldValueInvalid,
+                  ]}
+                >
+                  {detectedEmail.address ||
+                    detectedEmail.rawAddress ||
+                    'Missing (required)'}
                 </Text>
               </Text>
               <Text style={styles.emailCardLine} numberOfLines={1}>
@@ -528,7 +710,10 @@ export default function ChatGPTBrowser() {
             <View style={styles.emailCardButtons}>
               {/* Primary: Open in Gmail & Send */}
               <TouchableOpacity
-                style={styles.cardOpenGmailBtn}
+                style={[
+                  styles.cardOpenGmailBtn,
+                  !detectedEmail.isValid && styles.cardOpenGmailBtnDisabled,
+                ]}
                 onPress={() => openGmail(detectedEmail)}
                 activeOpacity={0.85}
               >
@@ -550,7 +735,10 @@ export default function ChatGPTBrowser() {
                   color={copyFeedback ? '#059669' : '#334155'}
                 />
                 <Text
-                  style={[styles.cardCopyBtnText, copyFeedback && styles.cardCopyBtnTextSuccess]}
+                  style={[
+                    styles.cardCopyBtnText,
+                    copyFeedback && styles.cardCopyBtnTextSuccess,
+                  ]}
                 >
                   {copyFeedback ? 'Copied' : 'Copy'}
                 </Text>
@@ -651,6 +839,43 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  // Helper bar
+  helperBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    backgroundColor: '#f8fafc',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    gap: 8,
+  },
+  helperPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    paddingVertical: 5,
+    borderRadius: 8,
+    gap: 5,
+  },
+  helperPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0284c7',
+  },
+  helperPillGmail: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  helperPillGmailText: {
+    color: '#ea4335',
   },
 
   // Banner
@@ -804,6 +1029,28 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.2,
   },
+  validBadge: {
+    backgroundColor: '#059669',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  validBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  invalidBadge: {
+    backgroundColor: '#dc2626',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  invalidBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '700',
+  },
   emailCardDismiss: {
     padding: 2,
   },
@@ -825,6 +1072,10 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
     fontWeight: '500',
   },
+  emailCardFieldValueInvalid: {
+    color: '#f87171',
+    fontWeight: '700',
+  },
   emailCardButtons: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -842,6 +1093,10 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 12,
     elevation: 4,
+  },
+  cardOpenGmailBtnDisabled: {
+    backgroundColor: '#64748b',
+    opacity: 0.7,
   },
   cardOpenGmailBtnText: {
     color: '#ffffff',
@@ -963,6 +1218,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
+  emailModalValueInvalid: {
+    color: '#dc2626',
+    borderColor: '#fca5a5',
+    backgroundColor: '#fef2f2',
+  },
   emailModalBodyContainer: {
     backgroundColor: '#f8fafc',
     padding: 10,
@@ -1010,6 +1270,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: 8,
     elevation: 3,
+  },
+  modalOpenGmailBtnDisabled: {
+    backgroundColor: '#94a3b8',
+    opacity: 0.7,
   },
   modalOpenGmailBtnText: {
     color: '#ffffff',
