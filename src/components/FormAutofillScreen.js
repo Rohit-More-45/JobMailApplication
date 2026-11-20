@@ -19,20 +19,56 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { buildAutofillScript } from '../scripts/formAutofillInjection';
 
 const STORAGE_KEY = '@JobMail:saved_form_fields';
+const SEED_KEY = '@JobMail:form_fields_seeded_v3';
+
+export const DEFAULT_READY_ANSWERS = [
+  { id: 'ans_1', name: 'Full Name', value: 'Rohit More' },
+  { id: 'ans_2', name: 'Phone Number', value: '+91-9545496035' },
+  { id: 'ans_3', name: 'Email', value: 'rohitmoreofficial45@gmail.com' },
+  { id: 'ans_4', name: 'LinkedIn / Profile', value: 'LinkedIn | GeeksforGeeks' },
+  { id: 'ans_5', name: 'Current Location', value: 'Nashik, Maharashtra, India' },
+  { id: 'ans_6', name: 'Position Applied For', value: 'Software Engineer / Full Stack Developer (.NET / Angular / Azure)' },
+  { id: 'ans_7', name: 'Highest Education', value: 'Bachelor of Engineering in Computer Engineering' },
+  { id: 'ans_8', name: 'College / University', value: 'MET’s Institute of Engineering, Savitribai Phule Pune University' },
+  { id: 'ans_9', name: 'CGPA', value: '8.60 / 10' },
+  { id: 'ans_10', name: 'Graduation Year', value: 'May 2024' },
+  { id: 'ans_11', name: 'Current Company', value: 'Aress Software and Education Technologies' },
+  { id: 'ans_12', name: 'Current Job Title', value: 'Software Engineer' },
+  { id: 'ans_13', name: 'Experience Duration', value: 'June 2024 – Present (2+ years)' },
+  { id: 'ans_14', name: 'Key Skills', value: 'C#, ASP.NET Core, Angular, React, SQL Server, Microsoft Azure, REST APIs, CI/CD, Entity Framework, JWT' },
+  { id: 'ans_15', name: 'Notice Period / Availability', value: '15–30 days' },
+  { id: 'ans_16', name: 'Expected Salary', value: 'As per industry standards / Open to discussion' },
+  { id: 'ans_17', name: 'Work Authorization', value: 'Yes (authorized to work in India)' },
+  { id: 'ans_18', name: 'Willing to Relocate', value: 'Yes (open to discussion)' },
+  {
+    id: 'ans_19',
+    name: 'Professional Summary',
+    value:
+      'Software Engineer with 2+ years experience building scalable cloud-native applications using ASP.NET Core, Angular, React and Microsoft Azure. Delivered production healthcare solutions, reduced Azure costs by ~20%, and automated CI/CD pipelines.',
+  },
+];
 
 const DEFAULT_SUGGESTIONS = [
   'Full Name',
   'First Name',
   'Last Name',
-  'Email Address',
   'Phone Number',
-  'Current Address',
-  'City',
-  'State',
-  'Country',
-  'PIN Code',
-  'LinkedIn Profile',
-  'Portfolio URL',
+  'Email',
+  'Current Location',
+  'Position Applied For',
+  'Highest Education',
+  'College / University',
+  'CGPA',
+  'Graduation Year',
+  'Current Company',
+  'Current Job Title',
+  'Experience Duration',
+  'Key Skills',
+  'Notice Period / Availability',
+  'Expected Salary',
+  'Work Authorization',
+  'Willing to Relocate',
+  'Professional Summary',
 ];
 
 const CUSTOM_USER_AGENT = Platform.select({
@@ -56,8 +92,9 @@ export default function FormAutofillScreen() {
   const [currentFormUrl, setCurrentFormUrl] = useState(null);
   const [formLoading, setFormLoading] = useState(false);
 
-  // Add field modal
+  // Add / Edit field modal
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
 
@@ -65,15 +102,26 @@ export default function FormAutofillScreen() {
   useEffect(() => {
     async function loadFields() {
       try {
+        const seeded = await AsyncStorage.getItem(SEED_KEY);
         const json = await AsyncStorage.getItem(STORAGE_KEY);
+        let parsed = null;
         if (json) {
-          const parsed = JSON.parse(json);
-          if (Array.isArray(parsed)) {
-            setSavedFields(parsed);
-          }
+          try {
+            parsed = JSON.parse(json);
+          } catch (_e) {}
+        }
+
+        if (!seeded || !Array.isArray(parsed) || parsed.length === 0) {
+          // Initialize with default ready answers
+          setSavedFields(DEFAULT_READY_ANSWERS);
+          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_READY_ANSWERS));
+          await AsyncStorage.setItem(SEED_KEY, 'v3');
+        } else {
+          setSavedFields(parsed);
         }
       } catch (err) {
         console.warn('[FormAutofillScreen] Load storage error:', err);
+        setSavedFields(DEFAULT_READY_ANSWERS);
       } finally {
         setLoadingStorage(false);
       }
@@ -97,6 +145,7 @@ export default function FormAutofillScreen() {
     const onBackPress = () => {
       if (modalVisible) {
         setModalVisible(false);
+        setEditingItem(null);
         return true;
       }
       if (currentFormUrl) {
@@ -110,8 +159,32 @@ export default function FormAutofillScreen() {
     return () => sub.remove();
   }, [modalVisible, currentFormUrl]);
 
-  // Handle Add New Field
-  const handleSaveNewField = useCallback(async () => {
+  // Open Add modal
+  const handleStartAdd = useCallback(() => {
+    setEditingItem(null);
+    setNewFieldName('');
+    setNewFieldValue('');
+    setModalVisible(true);
+  }, []);
+
+  // Open Edit modal prefilled with item's data
+  const handleStartEdit = useCallback((item) => {
+    setEditingItem(item);
+    setNewFieldName(item.name);
+    setNewFieldValue(item.value);
+    setModalVisible(true);
+  }, []);
+
+  // Close modal and reset fields
+  const handleCloseModal = useCallback(() => {
+    setModalVisible(false);
+    setEditingItem(null);
+    setNewFieldName('');
+    setNewFieldValue('');
+  }, []);
+
+  // Handle Save (Add or Update)
+  const handleSaveField = useCallback(async () => {
     const name = newFieldName.trim();
     const value = newFieldValue.trim();
 
@@ -120,22 +193,27 @@ export default function FormAutofillScreen() {
       return;
     }
 
-    const newItem = {
-      id: 'field_' + Date.now(),
-      name,
-      value,
-    };
+    let updated;
+    if (editingItem) {
+      updated = savedFields.map((f) =>
+        f.id === editingItem.id ? { ...f, name, value } : f
+      );
+    } else {
+      const newItem = {
+        id: 'field_' + Date.now(),
+        name,
+        value,
+      };
+      updated = [...savedFields, newItem];
+    }
 
-    const updated = [...savedFields, newItem];
     setSavedFields(updated);
     await persistFields(updated);
 
-    setNewFieldName('');
-    setNewFieldValue('');
-    setModalVisible(false);
-  }, [newFieldName, newFieldValue, savedFields, persistFields]);
+    handleCloseModal();
+  }, [newFieldName, newFieldValue, editingItem, savedFields, persistFields, handleCloseModal]);
 
-  // Handle Delete Field (No edit button, only delete per requirements)
+  // Handle Delete Field
   const handleDeleteField = useCallback(
     async (id) => {
       const updated = savedFields.filter((f) => f.id !== id);
@@ -144,6 +222,25 @@ export default function FormAutofillScreen() {
     },
     [savedFields, persistFields]
   );
+
+  // Restore Default Ready Answers
+  const handleResetDefaults = useCallback(() => {
+    Alert.alert(
+      'Restore Ready Answers',
+      'Do you want to reset all saved fields to Rohit More’s default job application ready answers?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Restore',
+          style: 'destructive',
+          onPress: async () => {
+            setSavedFields(DEFAULT_READY_ANSWERS);
+            await persistFields(DEFAULT_READY_ANSWERS);
+          },
+        },
+      ]
+    );
+  }, [persistFields]);
 
   // Handle Open Form URL
   const handleOpenFormUrl = useCallback(() => {
@@ -276,19 +373,36 @@ export default function FormAutofillScreen() {
 
           {/* Saved Values Section Header */}
           <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>
-              Saved Values {savedFields.length > 0 ? `(${savedFields.length})` : ''}
-            </Text>
+            <View style={styles.sectionTitleWrapper}>
+              <Text style={styles.sectionTitle}>Ready Answers</Text>
+              {savedFields.length > 0 && (
+                <View style={styles.countBadge}>
+                  <Text style={styles.countBadgeText}>{savedFields.length}</Text>
+                </View>
+              )}
+            </View>
 
-            {/* Plus Icon: Opens Add Field Popup */}
-            <TouchableOpacity
-              style={styles.addFieldIconBtn}
-              onPress={() => setModalVisible(true)}
-              activeOpacity={0.8}
-              accessibilityLabel="Add New Field"
-            >
-              <Ionicons name="add" size={18} color="#ffffff" />
-            </TouchableOpacity>
+            <View style={styles.sectionHeaderActions}>
+              {/* Restore Defaults Button */}
+              <TouchableOpacity
+                style={styles.resetHeaderBtn}
+                onPress={handleResetDefaults}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Restore Defaults"
+              >
+                <Ionicons name="refresh-outline" size={17} color="#64748b" />
+              </TouchableOpacity>
+
+              {/* Plus Icon: Opens Add Field Popup */}
+              <TouchableOpacity
+                style={styles.addFieldIconBtn}
+                onPress={handleStartAdd}
+                activeOpacity={0.8}
+                accessibilityLabel="Add New Field"
+              >
+                <Ionicons name="add" size={18} color="#ffffff" />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Saved Values List */}
@@ -300,6 +414,13 @@ export default function FormAutofillScreen() {
             <View style={styles.emptyBox}>
               <Ionicons name="document-text-outline" size={32} color="#cbd5e1" />
               <Text style={styles.emptyText}>No saved values yet. Tap + to add fields.</Text>
+              <TouchableOpacity
+                style={styles.emptyRestoreBtn}
+                onPress={handleResetDefaults}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.emptyRestoreBtnText}>Load Default Answers</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <FlatList
@@ -310,20 +431,31 @@ export default function FormAutofillScreen() {
                 <View style={styles.savedItemCard}>
                   <View style={styles.savedItemInfo}>
                     <Text style={styles.savedItemName}>{item.name}</Text>
-                    <Text style={styles.savedItemValue} numberOfLines={2}>
+                    <Text style={styles.savedItemValue} numberOfLines={3}>
                       {item.value}
                     </Text>
                   </View>
 
-                  {/* Small Delete Icon (No edit button per specification) */}
-                  <TouchableOpacity
-                    style={styles.deleteIconBtn}
-                    onPress={() => handleDeleteField(item.id)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    accessibilityLabel={`Delete ${item.name}`}
-                  >
-                    <Ionicons name="trash-outline" size={16} color="#ef4444" />
-                  </TouchableOpacity>
+                  {/* Actions: Edit and Delete buttons */}
+                  <View style={styles.cardActionsRow}>
+                    <TouchableOpacity
+                      style={styles.cardActionBtn}
+                      onPress={() => handleStartEdit(item)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityLabel={`Edit ${item.name}`}
+                    >
+                      <Ionicons name="pencil-outline" size={16} color="#0a66c2" />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.cardActionBtn}
+                      onPress={() => handleDeleteField(item.id)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityLabel={`Delete ${item.name}`}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
             />
@@ -331,69 +463,78 @@ export default function FormAutofillScreen() {
         </View>
       )}
 
-      {/* Small Add Field Popup Modal */}
+      {/* Add / Edit Field Modal */}
       <Modal
         visible={modalVisible}
         transparent={true}
         animationType="fade"
-        onRequestClose={() => setModalVisible(false)}
+        onRequestClose={handleCloseModal}
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Field</Text>
+              <Text style={styles.modalTitle}>
+                {editingItem ? 'Edit Field' : 'Add Field'}
+              </Text>
               <TouchableOpacity
-                onPress={() => setModalVisible(false)}
+                onPress={handleCloseModal}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <Ionicons name="close" size={20} color="#64748b" />
               </TouchableOpacity>
             </View>
 
+            <Text style={styles.modalFieldLabel}>Field Name</Text>
             <TextInput
               style={styles.popupInput}
-              placeholder="Field Name (e.g. Full Name)"
+              placeholder="e.g. Current Job Title"
               placeholderTextColor="#94a3b8"
               value={newFieldName}
               onChangeText={setNewFieldName}
               autoCapitalize="words"
             />
 
-            {/* Quick Suggestions Chips */}
-            <View style={styles.chipsRow}>
-              {DEFAULT_SUGGESTIONS.slice(0, 4).map((sugg) => (
-                <TouchableOpacity
-                  key={sugg}
-                  style={styles.chip}
-                  onPress={() => setNewFieldName(sugg)}
-                >
-                  <Text style={styles.chipText}>{sugg}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {/* Quick Suggestions Chips (shown when adding) */}
+            {!editingItem && (
+              <View style={styles.chipsRow}>
+                {DEFAULT_SUGGESTIONS.slice(0, 6).map((sugg) => (
+                  <TouchableOpacity
+                    key={sugg}
+                    style={styles.chip}
+                    onPress={() => setNewFieldName(sugg)}
+                  >
+                    <Text style={styles.chipText}>{sugg}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
 
+            <Text style={styles.modalFieldLabel}>Field Value</Text>
             <TextInput
               style={[styles.popupInput, styles.popupValueInput]}
-              placeholder="Field Value (e.g. John Smith)"
+              placeholder="e.g. Software Engineer"
               placeholderTextColor="#94a3b8"
               value={newFieldValue}
               onChangeText={setNewFieldValue}
-              multiline={false}
+              multiline={true}
+              numberOfLines={3}
             />
 
             <View style={styles.modalButtonsRow}>
               <TouchableOpacity
                 style={styles.modalCancelBtn}
-                onPress={() => setModalVisible(false)}
+                onPress={handleCloseModal}
               >
                 <Text style={styles.modalCancelBtnText}>Cancel</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.modalSaveBtn}
-                onPress={handleSaveNewField}
+                onPress={handleSaveField}
               >
-                <Text style={styles.modalSaveBtnText}>Save</Text>
+                <Text style={styles.modalSaveBtnText}>
+                  {editingItem ? 'Update' : 'Save'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -445,10 +586,39 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
+  sectionTitleWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '700',
     color: '#334155',
+  },
+  countBadge: {
+    backgroundColor: '#e2e8f0',
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  countBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  sectionHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  resetHeaderBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addFieldIconBtn: {
     width: 28,
@@ -464,7 +634,7 @@ const styles = StyleSheet.create({
   },
   savedItemCard: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     backgroundColor: '#f8fafc',
     borderRadius: 8,
@@ -487,11 +657,19 @@ const styles = StyleSheet.create({
   },
   savedItemValue: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '500',
     color: '#0f172a',
+    lineHeight: 18,
   },
-  deleteIconBtn: {
+  cardActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginTop: 2,
+  },
+  cardActionBtn: {
     padding: 6,
+    borderRadius: 4,
   },
   centerBox: {
     flex: 1,
@@ -508,6 +686,18 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 12,
     color: '#94a3b8',
+  },
+  emptyRestoreBtn: {
+    marginTop: 6,
+    backgroundColor: '#0a66c2',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  emptyRestoreBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
   },
 
   // Form WebView Mode Styles
@@ -575,18 +765,27 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 14,
     padding: 16,
-    gap: 10,
+    gap: 8,
     elevation: 8,
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 4,
   },
   modalTitle: {
     fontSize: 15,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  modalFieldLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    marginTop: 4,
   },
   popupInput: {
     backgroundColor: '#f8fafc',
@@ -599,12 +798,16 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   popupValueInput: {
-    marginTop: 2,
+    minHeight: 70,
+    maxHeight: 140,
+    textAlignVertical: 'top',
   },
   chipsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 5,
+    marginTop: 2,
+    marginBottom: 4,
   },
   chip: {
     backgroundColor: '#eff6ff',
@@ -621,7 +824,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 8,
-    marginTop: 4,
+    marginTop: 8,
   },
   modalCancelBtn: {
     paddingHorizontal: 14,

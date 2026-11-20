@@ -5,10 +5,12 @@
  * 1. Discovers input fields on standard web forms and Google Forms.
  * 2. Exact semantic matching: separates First Name, Last Name, and Full Name/Name so they
  *    never cross-match or fill into each other.
- * 3. Never overwrites fields containing user-entered information.
- * 4. Dispatches native input/change/blur events for React, Angular, and Google Forms compatibility.
- * 5. Highlights filled fields with a subtle confirmation flash.
- * 6. Never submits forms automatically.
+ * 3. Supports all standard Job Application Ready Answers: Contact info, Education, College,
+ *    CGPA, Graduation Year, Company, Job Title, Experience, Skills, Notice Period, Salary, etc.
+ * 4. Never overwrites fields containing user-entered information.
+ * 5. Dispatches native input/change/blur events for React, Angular, and Google Forms compatibility.
+ * 6. Highlights filled fields with a subtle confirmation flash.
+ * 7. Never submits forms automatically.
  */
 
 export function buildAutofillScript(savedFields = []) {
@@ -30,9 +32,9 @@ export function buildAutofillScript(savedFields = []) {
       .toString()
       .replace(/([a-z])([A-Z])/g, '$1 $2')
       .toLowerCase()
-      .replace(/[^a-z0-9]/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
       .trim()
-      .split(/\\s+/)
+      .split(' ')
       .filter(function(t) { return t.length > 0; });
   }
 
@@ -75,26 +77,182 @@ export function buildAutofillScript(savedFields = []) {
       return 'middlename';
     }
 
-    // 4. Organization / Company / School / College
+    // 4. CGPA / GPA / Percentage
     if (
-      tSet['company'] ||
-      tSet['organization'] ||
-      tSet['org'] ||
-      tSet['employer'] ||
-      tSet['school'] ||
-      tSet['college'] ||
-      tSet['university']
+      tSet['cgpa'] ||
+      tSet['gpa'] ||
+      tSet['percentage'] ||
+      tSet['marks'] ||
+      text.indexOf('cgpa') !== -1 ||
+      text.indexOf('gpa') !== -1
     ) {
-      return 'organization';
+      return 'cgpa';
     }
 
-    // 5. Username / Login
+    // 5. Graduation Year / Year of Passing / Batch
+    if (
+      (tSet['graduation'] && tSet['year']) ||
+      (tSet['year'] && tSet['passing']) ||
+      (tSet['passing'] && tSet['year']) ||
+      tSet['graduationyear'] ||
+      tSet['passout'] ||
+      tSet['batch'] ||
+      text.indexOf('graduation year') !== -1 ||
+      text.indexOf('year of passing') !== -1 ||
+      text.indexOf('passing year') !== -1
+    ) {
+      return 'graduation';
+    }
+
+    // 6. Notice Period / Availability
+    if (
+      tSet['notice'] ||
+      tSet['noticeperiod'] ||
+      (tSet['availability'] && !tSet['work']) ||
+      text.indexOf('notice period') !== -1 ||
+      text.indexOf('how soon') !== -1
+    ) {
+      return 'notice';
+    }
+
+    // 7. Expected Salary / CTC
+    if (
+      tSet['salary'] ||
+      tSet['ctc'] ||
+      tSet['compensation'] ||
+      tSet['remuneration'] ||
+      text.indexOf('expected salary') !== -1 ||
+      text.indexOf('expected ctc') !== -1 ||
+      text.indexOf('salary expectation') !== -1
+    ) {
+      return 'salary';
+    }
+
+    // 8. Work Authorization / Eligibility / Permit
+    if (
+      (tSet['work'] && tSet['authorization']) ||
+      (tSet['authorized'] && tSet['work']) ||
+      tSet['workpermit'] ||
+      text.indexOf('work authorization') !== -1 ||
+      text.indexOf('authorized to work') !== -1 ||
+      text.indexOf('legally authorized') !== -1
+    ) {
+      return 'authorization';
+    }
+
+    // 9. Willing to Relocate
+    if (
+      tSet['relocate'] ||
+      tSet['relocation'] ||
+      text.indexOf('relocate') !== -1 ||
+      text.indexOf('relocation') !== -1
+    ) {
+      return 'relocation';
+    }
+
+    // 10. Professional Summary / Bio / About Me / Cover Letter
+    if (
+      (tSet['professional'] && tSet['summary']) ||
+      tSet['bio'] ||
+      (tSet['about'] && tSet['me']) ||
+      text.indexOf('professional summary') !== -1 ||
+      text.indexOf('about yourself') !== -1 ||
+      text.indexOf('cover letter') !== -1
+    ) {
+      return 'summary';
+    }
+
+    // 11. Key Skills / Technologies / Tech Stack
+    if (
+      tSet['skills'] ||
+      tSet['skill'] ||
+      tSet['techstack'] ||
+      tSet['technologies'] ||
+      text.indexOf('key skills') !== -1 ||
+      text.indexOf('technical skills') !== -1
+    ) {
+      return 'skills';
+    }
+
+    // 12. Experience Duration / Work Experience
+    if (
+      (tSet['experience'] && !tSet['company']) ||
+      tSet['exp'] ||
+      (tSet['work'] && tSet['experience']) ||
+      (tSet['total'] && tSet['experience']) ||
+      text.indexOf('experience duration') !== -1 ||
+      text.indexOf('years of experience') !== -1 ||
+      text.indexOf('total experience') !== -1
+    ) {
+      return 'experience';
+    }
+
+    // 13. Current Job Title / Designation
+    if (
+      (tSet['current'] && tSet['title']) ||
+      (tSet['job'] && tSet['title']) ||
+      tSet['designation'] ||
+      (tSet['current'] && tSet['role']) ||
+      text.indexOf('current job title') !== -1 ||
+      text.indexOf('job title') !== -1
+    ) {
+      return 'jobtitle';
+    }
+
+    // 14. Position Applied For
+    if (
+      (tSet['position'] && tSet['applied']) ||
+      (tSet['role'] && tSet['applied']) ||
+      text.indexOf('position applied') !== -1 ||
+      text.indexOf('role applied') !== -1
+    ) {
+      return 'position';
+    }
+
+    // 15. College / University / Institute / School
+    if (
+      tSet['college'] ||
+      tSet['university'] ||
+      tSet['institute'] ||
+      (tSet['school'] && !tSet['high']) ||
+      text.indexOf('college') !== -1 ||
+      text.indexOf('university') !== -1 ||
+      text.indexOf('institute') !== -1
+    ) {
+      return 'college';
+    }
+
+    // 16. Highest Education / Degree / Qualification
+    if (
+      (tSet['highest'] && tSet['education']) ||
+      tSet['qualification'] ||
+      tSet['degree'] ||
+      (tSet['education'] && !tSet['college'] && !tSet['university']) ||
+      text.indexOf('highest education') !== -1 ||
+      text.indexOf('highest degree') !== -1
+    ) {
+      return 'education';
+    }
+
+    // 17. Current Company / Employer / Organization
+    if (
+      (tSet['current'] && tSet['company']) ||
+      (tSet['current'] && tSet['employer']) ||
+      (tSet['company'] && !tSet['college'] && !tSet['school']) ||
+      tSet['employer'] ||
+      tSet['organization'] ||
+      text.indexOf('current company') !== -1 ||
+      text.indexOf('current employer') !== -1
+    ) {
+      return 'company';
+    }
+
+    // 18. Username / Login
     if (tSet['username'] || (tSet['user'] && tSet['name']) || tSet['login']) {
       return 'username';
     }
 
-    // 6. Full Name / Name
-    // Matches if it has 'fullname' OR ('full' and 'name') OR just 'name' (and NOT first, last, user, company)
+    // 19. Full Name / Name (excluding first, last, user, company)
     if (
       tSet['fullname'] ||
       (tSet['full'] && tSet['name']) ||
@@ -103,37 +261,46 @@ export function buildAutofillScript(savedFields = []) {
       return 'fullname';
     }
 
-    // 7. Email
+    // 20. Email
     if (tSet['email'] || tSet['mail'] || text.indexOf('email') !== -1 || text.indexOf('e-mail') !== -1) {
       return 'email';
     }
 
-    // 8. Phone / Mobile
+    // 21. Phone / Mobile
     if (tSet['phone'] || tSet['mobile'] || tSet['telephone'] || tSet['tel'] || tSet['cell']) {
       return 'phone';
     }
 
-    // 9. Current / Street Address
+    // 22. Current Location / Location
+    if (
+      (tSet['current'] && tSet['location']) ||
+      tSet['location'] ||
+      text.indexOf('current location') !== -1
+    ) {
+      return 'location';
+    }
+
+    // 23. Current / Street Address
     if (tSet['address'] || tSet['street'] || tSet['residence']) {
       return 'address';
     }
 
-    // 10. City
+    // 24. City
     if (tSet['city'] || tSet['town'] || tSet['district']) {
       return 'city';
     }
 
-    // 11. State / Province
+    // 25. State / Province
     if (tSet['state'] || tSet['province'] || tSet['region']) {
       return 'state';
     }
 
-    // 12. Country / Nationality
+    // 26. Country / Nationality
     if (tSet['country'] || tSet['nationality']) {
       return 'country';
     }
 
-    // 13. PIN Code / ZIP
+    // 27. PIN Code / ZIP
     if (
       tSet['pincode'] ||
       tSet['zipcode'] ||
@@ -145,12 +312,12 @@ export function buildAutofillScript(savedFields = []) {
       return 'pincode';
     }
 
-    // 14. LinkedIn Profile
+    // 28. LinkedIn Profile
     if (tSet['linkedin'] || (tSet['linked'] && tSet['in']) || text.indexOf('linkedin') !== -1) {
       return 'linkedin';
     }
 
-    // 15. Portfolio / Website / GitHub
+    // 29. Portfolio / Website / GitHub
     if (tSet['portfolio'] || tSet['github'] || tSet['website'] || (tSet['personal'] && tSet['site'])) {
       return 'portfolio';
     }
@@ -239,10 +406,13 @@ export function buildAutofillScript(savedFields = []) {
     }
 
     // Priority 2: Semantic Category Match with strict isolation
-    // firstname ONLY matches firstname
-    // lastname ONLY matches lastname
-    // fullname ONLY matches fullname (never firstname or lastname)
+    // firstname ONLY matches firstname (or derives from multi-word fullname if no firstname saved)
+    // lastname ONLY matches lastname (or derives from multi-word fullname if no lastname saved)
+    // fullname ONLY matches fullname
     if (elCategory !== 'other') {
+      var explicitMatch = null;
+      var fullNameField = null;
+
       for (var c = 0; c < fields.length; c++) {
         var sf = fields[c];
         if (!sf || !sf.name || !sf.value) continue;
@@ -250,7 +420,27 @@ export function buildAutofillScript(savedFields = []) {
         var sfCategory = classifyTokens(sfTokens, sf.name);
 
         if (sfCategory === elCategory) {
-          return sf.value;
+          explicitMatch = sf.value;
+          break;
+        }
+
+        if (sfCategory === 'fullname') {
+          fullNameField = sf;
+        }
+      }
+
+      if (explicitMatch) {
+        return explicitMatch;
+      }
+
+      // Fallback derivation for First Name / Last Name if Full Name is available
+      if (fullNameField && fullNameField.value) {
+        var nameParts = fullNameField.value.trim().split(/\\s+/);
+        if (elCategory === 'firstname' && nameParts.length >= 1) {
+          return nameParts[0];
+        }
+        if (elCategory === 'lastname' && nameParts.length >= 2) {
+          return nameParts.slice(1).join(' ');
         }
       }
     }
