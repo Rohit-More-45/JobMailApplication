@@ -24,10 +24,27 @@ export default function TabsLayout() {
         },
       }}
     >
+      {/* 1. Unfortunately Hired (Default Tab) */}
       <Tabs.Screen
         name="index"
         options={{
-          title: 'LinkedIn',
+          title: 'Unfortunately Hired',
+          tabBarLabel: 'Unfort. Hired',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'briefcase' : 'briefcase-outline'}
+              size={20}
+              color={color}
+            />
+          ),
+        }}
+      />
+
+      {/* 2. LinkedIn Automation */}
+      <Tabs.Screen
+        name="linkedin"
+        options={{
+          title: 'LinkedIn Automation',
           tabBarLabel: 'LinkedIn',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
@@ -38,6 +55,8 @@ export default function TabsLayout() {
           ),
         }}
       />
+
+      {/* 3. ChatGPT */}
       <Tabs.Screen
         name="chatgpt"
         options={{
@@ -52,10 +71,12 @@ export default function TabsLayout() {
           ),
         }}
       />
+
+      {/* 4. Form Autofill */}
       <Tabs.Screen
         name="pending2"
         options={{
-          title: 'Autofill',
+          title: 'Form Autofill',
           tabBarLabel: 'Autofill',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
@@ -66,6 +87,8 @@ export default function TabsLayout() {
           ),
         }}
       />
+
+      {/* Hidden pending3 */}
       <Tabs.Screen
         name="pending3"
         options={{

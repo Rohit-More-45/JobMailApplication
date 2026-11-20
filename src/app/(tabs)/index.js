@@ -1,6 +1,6 @@
 import React from 'react';
-import LinkedInBrowser from '../../components/LinkedInBrowser';
+import UnfortunatelyHiredBrowser from '../../components/UnfortunatelyHiredBrowser';
 
-export default function LinkedInAutomationScreen() {
-  return <LinkedInBrowser />;
+export default function UnfortunatelyHiredScreen() {
+  return <UnfortunatelyHiredBrowser />;
 }

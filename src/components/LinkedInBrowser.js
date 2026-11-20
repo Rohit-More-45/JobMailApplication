@@ -36,8 +36,11 @@ export default function LinkedInBrowser() {
     screenshots,
     addScreenshot,
     clearScreenshots,
+    externalJobUrl,
+    clearExternalJobUrl,
   } = useSelection();
 
+  const [currentUrl, setCurrentUrl] = useState(LINKEDIN_FEED_URL);
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -45,6 +48,23 @@ export default function LinkedInBrowser() {
 
   // Temporarily hide buttons during snapshot capture
   const [isCapturing, setIsCapturing] = useState(false);
+
+  // Navigate when an external job URL is routed from Unfortunately Hired
+  useEffect(() => {
+    if (externalJobUrl) {
+      const targetUrl = externalJobUrl;
+      clearExternalJobUrl();
+      setCurrentUrl(targetUrl);
+      if (webViewRef.current) {
+        try {
+          webViewRef.current.injectJavaScript(`
+            window.location.href = ${JSON.stringify(targetUrl)};
+            true;
+          `);
+        } catch (_e) {}
+      }
+    }
+  }, [externalJobUrl, clearExternalJobUrl]);
 
   // Register WebView ref with context
   useEffect(() => {
@@ -165,6 +185,7 @@ export default function LinkedInBrowser() {
 
   const handleGoFeed = useCallback(() => {
     setHasError(false);
+    setCurrentUrl(LINKEDIN_FEED_URL);
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(`
         window.location.href = '${LINKEDIN_FEED_URL}';
@@ -207,7 +228,7 @@ export default function LinkedInBrowser() {
           >
             <WebView
               ref={webViewRef}
-              source={{ uri: LINKEDIN_FEED_URL }}
+              source={{ uri: currentUrl }}
               style={styles.webView}
               userAgent={CUSTOM_USER_AGENT}
               javaScriptEnabled={true}
@@ -240,7 +261,7 @@ export default function LinkedInBrowser() {
           </ViewShot>
         )}
 
-        {/* Compact Floating Screenshot Icons: Camera & Trash only */}
+        {/* Compact Floating Screenshot Icons: Camera, Counter & Trash */}
         {!isCapturing && (
           <View style={styles.compactScreenshotDock}>
             {/* Take Screenshot: Small Camera Icon Only */}
@@ -256,6 +277,11 @@ export default function LinkedInBrowser() {
             >
               <Ionicons name="camera" size={18} color="#ffffff" />
             </TouchableOpacity>
+
+            {/* Small Screenshot Counter (e.g. 0/3, 1/3, 2/3, 3/3) */}
+            <View style={styles.counterBadge}>
+              <Text style={styles.counterText}>{screenshots.length}/3</Text>
+            </View>
 
             {/* Clear Screenshots: Small Trash Icon Only */}
             <TouchableOpacity
@@ -376,5 +402,20 @@ const styles = StyleSheet.create({
   trashBtnDisabled: {
     backgroundColor: '#f8fafc',
     borderColor: '#e2e8f0',
+  },
+  counterBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  counterText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
   },
 });

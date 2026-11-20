@@ -17,6 +17,8 @@ import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
+import * as Sharing from 'expo-sharing';
+import { useSelection } from '../context/SelectionContext';
 import { CHATGPT_INJECTION_SCRIPT } from '../scripts/chatgptInjection';
 
 const CHATGPT_URL = 'https://chatgpt.com';
@@ -134,6 +136,7 @@ function parseEmailDetails(text) {
 export default function ChatGPTBrowser() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
+  const { screenshots } = useSelection();
 
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -239,6 +242,187 @@ export default function ChatGPTBrowser() {
     }
   }, [pastedText]);
 
+  const triggerSharingFallback = useCallback(async (uris) => {
+    if (!uris || uris.length === 0) return;
+    try {
+      const isAvailable = await Sharing.isAvailableAsync();
+      Alert.alert(
+        'Attach Screenshots',
+        'Direct web insertion was not accepted by the ChatGPT page. Screenshot has been copied to your clipboard.\n\nWould you like to attach it via Android file sharing?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Attach via Share',
+            onPress: async () => {
+              if (isAvailable && uris[0]) {
+                try {
+                  await Sharing.shareAsync(uris[0], {
+                    mimeType: 'image/png',
+                    dialogTitle: 'Attach Screenshot to ChatGPT',
+                  });
+                } catch (err) {
+                  console.warn('[ChatGPTBrowser] Sharing error:', err);
+                }
+              }
+            },
+          },
+        ]
+      );
+    } catch (_err) {
+      Alert.alert(
+        'Screenshot on Clipboard',
+        'Direct insertion was not accepted. The screenshot has been copied to your clipboard so you can paste it into the composer.',
+        [{ text: 'OK' }]
+      );
+    }
+  }, []);
+
+  const handlePasteScreenshots = useCallback(async () => {
+    if (!screenshots || screenshots.length === 0) {
+      Alert.alert(
+        'No Screenshots Available',
+        'No screenshots have been captured yet. Open the browser tab and tap the camera icon to capture up to 3 screenshots.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    try {
+      // 1. Read files into base64 data URLs
+      const dataUrls = [];
+      for (const uri of screenshots) {
+        try {
+          const response = await fetch(uri);
+          const blob = await response.blob();
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+          if (dataUrl && typeof dataUrl === 'string') {
+            dataUrls.push(dataUrl);
+          }
+        } catch (readErr) {
+          console.warn('[ChatGPTBrowser] Error reading screenshot URI:', readErr);
+        }
+      }
+
+      if (dataUrls.length === 0) {
+        Alert.alert(
+          'Screenshot Error',
+          'Could not read the stored screenshot files. Please capture a new screenshot.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // 2. Copy the primary screenshot to clipboard as a reliable backup
+      try {
+        const rawBase64 = dataUrls[0].includes(',')
+          ? dataUrls[0].split(',')[1]
+          : dataUrls[0];
+        if (rawBase64) {
+          await Clipboard.setImageAsync(rawBase64);
+        }
+      } catch (_clipErr) {
+        console.warn('[ChatGPTBrowser] Clipboard.setImageAsync error:', _clipErr);
+      }
+
+      // 3. Inject script into ChatGPT WebView to attach files or simulate paste
+      if (webViewRef.current) {
+        const injection = `
+          (async function() {
+            try {
+              const dataUrls = ${JSON.stringify(dataUrls)};
+              var attached = false;
+
+              // Method 1: Find file input
+              var fileInput = document.querySelector('input[type="file"]');
+              if (fileInput) {
+                var dt = new DataTransfer();
+                for (var i = 0; i < dataUrls.length; i++) {
+                  var res = await fetch(dataUrls[i]);
+                  var blob = await res.blob();
+                  var file = new File([blob], 'screenshot_' + (i + 1) + '.png', { type: 'image/png' });
+                  dt.items.add(file);
+                }
+                fileInput.files = dt.files;
+                fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+                fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+                attached = true;
+              }
+
+              // Method 2: Simulate paste on composer
+              var composer = document.querySelector('#prompt-textarea') ||
+                             document.querySelector('div[contenteditable="true"]') ||
+                             document.querySelector('textarea');
+              if (composer) {
+                composer.focus();
+                var dtPaste = new DataTransfer();
+                for (var j = 0; j < dataUrls.length; j++) {
+                  var resP = await fetch(dataUrls[j]);
+                  var blobP = await resP.blob();
+                  var fileP = new File([blobP], 'screenshot_' + (j + 1) + '.png', { type: 'image/png' });
+                  dtPaste.items.add(fileP);
+                }
+                var pasteEvt = new ClipboardEvent('paste', {
+                  clipboardData: dtPaste,
+                  bubbles: true,
+                  cancelable: true
+                });
+                composer.dispatchEvent(pasteEvt);
+                attached = true;
+              }
+
+              if (attached) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'SCREENSHOTS_PASTED_SUCCESS',
+                  count: dataUrls.length
+                }));
+              } else {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'SCREENSHOTS_PASTE_FAILED',
+                  reason: 'No composer input element found'
+                }));
+              }
+            } catch (err) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'SCREENSHOTS_PASTE_FAILED',
+                reason: err.message || 'Injection error'
+              }));
+            }
+          })();
+          true;
+        `;
+        webViewRef.current.injectJavaScript(injection);
+      }
+    } catch (err) {
+      console.warn('[ChatGPTBrowser] handlePasteScreenshots error:', err);
+      triggerSharingFallback(screenshots);
+    }
+  }, [screenshots, triggerSharingFallback]);
+
+  const handleMessage = useCallback(
+    (event) => {
+      try {
+        const data = JSON.parse(event.nativeEvent.data);
+        if (!data) return;
+
+        if (data.type === 'SCREENSHOTS_PASTED_SUCCESS') {
+          Alert.alert(
+            'Screenshots Added',
+            `Successfully added ${data.count} screenshot(s) to ChatGPT input. Enter your prompt and send.`,
+            [{ text: 'OK' }]
+          );
+        } else if (data.type === 'SCREENSHOTS_PASTE_FAILED') {
+          triggerSharingFallback(screenshots);
+        }
+      } catch (_e) {}
+    },
+    [screenshots, triggerSharingFallback]
+  );
+
   const handleLoadEnd = useCallback(() => {
     setLoading(false);
     if (webViewRef.current) {
@@ -282,15 +466,47 @@ export default function ChatGPTBrowser() {
         </View>
       </View>
 
-      {/* Action Bar: Minimal "Generate Gmail Draft" Button (No prompt format button) */}
+      {/* Action Bar: Paste Screenshots & Generate Gmail Draft */}
       <View style={styles.topActionBar}>
+        <TouchableOpacity
+          style={[
+            styles.pasteScreenshotsBtn,
+            screenshots.length === 0 && styles.btnDisabled,
+          ]}
+          onPress={handlePasteScreenshots}
+          activeOpacity={0.85}
+          accessibilityLabel="Paste Screenshots"
+        >
+          <Ionicons
+            name="images-outline"
+            size={16}
+            color={screenshots.length === 0 ? '#94a3b8' : '#ffffff'}
+          />
+          <Text
+            style={[
+              styles.pasteScreenshotsBtnText,
+              screenshots.length === 0 && styles.btnTextDisabled,
+            ]}
+          >
+            Paste Screenshots
+          </Text>
+          {screenshots.length > 0 && (
+            <View style={styles.screenshotCountBadge}>
+              <Text style={styles.screenshotCountBadgeText}>
+                {screenshots.length}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.generateDraftBtn}
           onPress={() => setModalVisible(true)}
           activeOpacity={0.85}
+          accessibilityLabel="Generate Gmail Draft"
         >
-          <Ionicons name="mail" size={18} color="#ffffff" />
-          <Text style={styles.generateDraftBtnText}>Generate Gmail Draft</Text>
+          <Ionicons name="mail" size={16} color="#ffffff" />
+          <Text style={styles.generateDraftBtnText}>Generate Draft</Text>
         </TouchableOpacity>
       </View>
 
@@ -314,6 +530,7 @@ export default function ChatGPTBrowser() {
           )}
           injectedJavaScript={CHATGPT_INJECTION_SCRIPT}
           onLoadEnd={handleLoadEnd}
+          onMessage={handleMessage}
           onNavigationStateChange={(nav) => setCanGoBack(nav.canGoBack)}
         />
       </View>
@@ -476,26 +693,65 @@ const styles = StyleSheet.create({
   },
   topActionBar: {
     backgroundColor: '#ffffff',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pasteScreenshotsBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0a66c2',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 6,
+    elevation: 2,
+  },
+  pasteScreenshotsBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  screenshotCountBadge: {
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 8,
+  },
+  screenshotCountBadgeText: {
+    color: '#0a66c2',
+    fontSize: 11,
+    fontWeight: '800',
   },
   generateDraftBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#ea4335',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 6,
     elevation: 2,
   },
   generateDraftBtnText: {
     color: '#ffffff',
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '700',
+  },
+  btnDisabled: {
+    backgroundColor: '#e2e8f0',
+    elevation: 0,
+  },
+  btnTextDisabled: {
+    color: '#94a3b8',
   },
   webViewContainer: {
     flex: 1,

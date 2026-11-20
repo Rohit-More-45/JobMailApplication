@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useCallback } from 'react';
+import { router } from 'expo-router';
 
 const SelectionContext = createContext({
   selectedPostId: null,
@@ -10,11 +11,15 @@ const SelectionContext = createContext({
   screenshots: [],
   addScreenshot: () => {},
   clearScreenshots: () => {},
+  externalJobUrl: null,
+  navigateToJobUrl: () => {},
+  clearExternalJobUrl: () => {},
 });
 
 export function SelectionProvider({ children }) {
   const [selectedPostId, setSelectedPostId] = useState(null);
   const [screenshots, setScreenshots] = useState([]);
+  const [externalJobUrl, setExternalJobUrl] = useState(null);
   const webViewRef = useRef(null);
 
   const registerWebView = useCallback((ref) => {
@@ -48,6 +53,20 @@ export function SelectionProvider({ children }) {
     setScreenshots([]);
   }, []);
 
+  const navigateToJobUrl = useCallback((url) => {
+    if (!url) return;
+    setExternalJobUrl(url);
+    try {
+      router.navigate('/(tabs)/linkedin');
+    } catch (err) {
+      console.warn('[SelectionContext] router.navigate error:', err);
+    }
+  }, []);
+
+  const clearExternalJobUrl = useCallback(() => {
+    setExternalJobUrl(null);
+  }, []);
+
   return (
     <SelectionContext.Provider
       value={{
@@ -60,6 +79,9 @@ export function SelectionProvider({ children }) {
         screenshots,
         addScreenshot,
         clearScreenshots,
+        externalJobUrl,
+        navigateToJobUrl,
+        clearExternalJobUrl,
       }}
     >
       {children}
