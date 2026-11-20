@@ -77,7 +77,7 @@ export default function LinkedInBrowser() {
     if (screenshots.length >= 3) {
       Alert.alert(
         'Maximum Limit Reached',
-        'Maximum limit of 3 screenshots reached (3/3). Please tap "Clear Screenshots" to capture a new set.',
+        'Maximum limit of 3 screenshots reached. Please tap "Clear Screenshots" to capture a new set.',
         [{ text: 'OK' }]
       );
       return;
@@ -100,14 +100,6 @@ export default function LinkedInBrowser() {
 
       if (fileUri) {
         addScreenshot(fileUri);
-        const nextCount = screenshots.length + 1;
-        if (nextCount >= 3) {
-          Alert.alert(
-            'Maximum Limit Reached',
-            'Screenshots: 3/3 captured. You have reached the maximum limit of 3 screenshots.',
-            [{ text: 'OK' }]
-          );
-        }
       }
     } catch (e) {
       console.warn('[LinkedInBrowser] handleTakeScreenshot error:', e);
@@ -249,56 +241,44 @@ export default function LinkedInBrowser() {
           </ViewShot>
         )}
 
-        {/* Screenshot Toolbar: Take Screenshot, Clear Screenshots, Counter */}
+        {/* Minimal Screenshot Toolbar: Only Take Screenshot & Clear Screenshots Buttons */}
         {!isCapturing && (
           <View style={styles.screenshotBar}>
-            {/* Simple Counter: e.g. Screenshots: 2/3 */}
-            <View style={styles.counterBadge}>
-              <Ionicons name="images-outline" size={15} color="#0a66c2" />
-              <Text style={styles.counterText}>
-                Screenshots: {screenshots.length}/3
+            <TouchableOpacity
+              style={[
+                styles.takeScreenshotBtn,
+                screenshots.length >= 3 && styles.takeScreenshotBtnDisabled,
+              ]}
+              onPress={handleTakeScreenshot}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="camera" size={17} color="#ffffff" />
+              <Text style={styles.takeScreenshotBtnText}>Take Screenshot</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.clearScreenshotsBtn,
+                screenshots.length === 0 && styles.clearScreenshotsBtnDisabled,
+              ]}
+              onPress={handleClearScreenshots}
+              activeOpacity={0.85}
+              disabled={screenshots.length === 0}
+            >
+              <Ionicons
+                name="trash-outline"
+                size={16}
+                color={screenshots.length === 0 ? '#94a3b8' : '#ef4444'}
+              />
+              <Text
+                style={[
+                  styles.clearScreenshotsBtnText,
+                  screenshots.length === 0 && styles.clearScreenshotsBtnTextDisabled,
+                ]}
+              >
+                Clear Screenshots
               </Text>
-            </View>
-
-            <View style={styles.buttonRow}>
-              {/* Button 1: Take Screenshot */}
-              <TouchableOpacity
-                style={[
-                  styles.takeScreenshotBtn,
-                  screenshots.length >= 3 && styles.takeScreenshotBtnDisabled,
-                ]}
-                onPress={handleTakeScreenshot}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="camera" size={16} color="#ffffff" />
-                <Text style={styles.takeScreenshotBtnText}>Take Screenshot</Text>
-              </TouchableOpacity>
-
-              {/* Button 2: Clear Screenshots */}
-              <TouchableOpacity
-                style={[
-                  styles.clearScreenshotsBtn,
-                  screenshots.length === 0 && styles.clearScreenshotsBtnDisabled,
-                ]}
-                onPress={handleClearScreenshots}
-                activeOpacity={0.85}
-                disabled={screenshots.length === 0}
-              >
-                <Ionicons
-                  name="trash-outline"
-                  size={15}
-                  color={screenshots.length === 0 ? '#94a3b8' : '#ef4444'}
-                />
-                <Text
-                  style={[
-                    styles.clearScreenshotsBtnText,
-                    screenshots.length === 0 && styles.clearScreenshotsBtnTextDisabled,
-                  ]}
-                >
-                  Clear
-                </Text>
-              </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -374,11 +354,12 @@ const styles = StyleSheet.create({
     right: 14,
     backgroundColor: '#ffffff',
     borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    gap: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15,
@@ -387,33 +368,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  counterBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f7ff',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-    gap: 6,
-  },
-  counterText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0a66c2',
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   takeScreenshotBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#0a66c2',
+    paddingVertical: 11,
     paddingHorizontal: 14,
-    paddingVertical: 8,
     borderRadius: 10,
     gap: 6,
     elevation: 2,
@@ -427,15 +389,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   clearScreenshotsBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#fef2f2',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#fee2e2',
-    gap: 4,
+    gap: 5,
   },
   clearScreenshotsBtnDisabled: {
     backgroundColor: '#f8fafc',
