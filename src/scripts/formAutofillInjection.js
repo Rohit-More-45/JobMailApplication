@@ -3,8 +3,8 @@
  *
  * Capabilities:
  * 1. Discovers input fields on standard web forms and Google Forms.
- * 2. Intelligently matches form fields against user-saved fields using labels, placeholders,
- *    accessible names, ids, and semantic categories.
+ * 2. Exact semantic matching: separates First Name, Last Name, and Full Name/Name so they
+ *    never cross-match or fill into each other.
  * 3. Never overwrites fields containing user-entered information.
  * 4. Dispatches native input/change/blur events for React, Angular, and Google Forms compatibility.
  * 5. Highlights filled fields with a subtle confirmation flash.
@@ -18,24 +18,144 @@ export function buildAutofillScript(savedFields = []) {
 (function() {
   var savedFields = ${fieldsJson} || [];
 
-  var ALIAS_MAP = {
-    fullname: ['full name', 'fullname', 'your name', 'applicant name', 'candidate name', 'complete name', 'name'],
-    firstname: ['first name', 'firstname', 'given name', 'fname'],
-    lastname: ['last name', 'lastname', 'surname', 'family name', 'lname'],
-    email: ['email', 'email address', 'e-mail', 'mail address', 'mail'],
-    phone: ['phone', 'phone number', 'mobile', 'mobile number', 'telephone', 'contact number', 'cell', 'tel'],
-    address: ['address', 'current address', 'street address', 'street', 'residence'],
-    city: ['city', 'town', 'district'],
-    state: ['state', 'province', 'region'],
-    country: ['country', 'nationality'],
-    pincode: ['pin code', 'pincode', 'postal code', 'postalcode', 'zip', 'zip code', 'zipcode', 'pin'],
-    linkedin: ['linkedin', 'linkedin profile', 'linkedin url', 'linked in'],
-    portfolio: ['portfolio', 'portfolio url', 'website', 'personal website', 'site', 'github', 'github url']
-  };
-
   function normalize(str) {
     if (!str) return '';
     return str.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  // Tokenize text on camelCase, underscores, hyphens, and whitespace
+  function getTokens(str) {
+    if (!str) return [];
+    return str
+      .toString()
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, ' ')
+      .trim()
+      .split(/\\s+/)
+      .filter(function(t) { return t.length > 0; });
+  }
+
+  // Strictly classify tokens and text into semantic categories
+  function classifyTokens(tokens, rawText) {
+    var tSet = {};
+    for (var i = 0; i < tokens.length; i++) {
+      tSet[tokens[i]] = true;
+    }
+    var text = (rawText || '').toLowerCase();
+
+    // 1. Explicit First Name (never matches Last Name or generic Name)
+    if (
+      tSet['givenname'] ||
+      tSet['fname'] ||
+      tSet['first'] ||
+      tSet['given'] ||
+      tSet['forename'] ||
+      text.indexOf('first name') !== -1 ||
+      text.indexOf('given name') !== -1
+    ) {
+      return 'firstname';
+    }
+
+    // 2. Explicit Last Name (never matches First Name or generic Name)
+    if (
+      tSet['familyname'] ||
+      tSet['surname'] ||
+      tSet['lname'] ||
+      tSet['last'] ||
+      (tSet['family'] && tSet['name']) ||
+      text.indexOf('last name') !== -1 ||
+      text.indexOf('family name') !== -1
+    ) {
+      return 'lastname';
+    }
+
+    // 3. Middle Name
+    if (tSet['middle'] || tSet['mname'] || text.indexOf('middle name') !== -1) {
+      return 'middlename';
+    }
+
+    // 4. Organization / Company / School / College
+    if (
+      tSet['company'] ||
+      tSet['organization'] ||
+      tSet['org'] ||
+      tSet['employer'] ||
+      tSet['school'] ||
+      tSet['college'] ||
+      tSet['university']
+    ) {
+      return 'organization';
+    }
+
+    // 5. Username / Login
+    if (tSet['username'] || (tSet['user'] && tSet['name']) || tSet['login']) {
+      return 'username';
+    }
+
+    // 6. Full Name / Name
+    // Matches if it has 'fullname' OR ('full' and 'name') OR just 'name' (and NOT first, last, user, company)
+    if (
+      tSet['fullname'] ||
+      (tSet['full'] && tSet['name']) ||
+      (tSet['name'] && !tSet['first'] && !tSet['last'] && !tSet['company'] && !tSet['user'])
+    ) {
+      return 'fullname';
+    }
+
+    // 7. Email
+    if (tSet['email'] || tSet['mail'] || text.indexOf('email') !== -1 || text.indexOf('e-mail') !== -1) {
+      return 'email';
+    }
+
+    // 8. Phone / Mobile
+    if (tSet['phone'] || tSet['mobile'] || tSet['telephone'] || tSet['tel'] || tSet['cell']) {
+      return 'phone';
+    }
+
+    // 9. Current / Street Address
+    if (tSet['address'] || tSet['street'] || tSet['residence']) {
+      return 'address';
+    }
+
+    // 10. City
+    if (tSet['city'] || tSet['town'] || tSet['district']) {
+      return 'city';
+    }
+
+    // 11. State / Province
+    if (tSet['state'] || tSet['province'] || tSet['region']) {
+      return 'state';
+    }
+
+    // 12. Country / Nationality
+    if (tSet['country'] || tSet['nationality']) {
+      return 'country';
+    }
+
+    // 13. PIN Code / ZIP
+    if (
+      tSet['pincode'] ||
+      tSet['zipcode'] ||
+      (tSet['pin'] && tSet['code']) ||
+      (tSet['zip'] && tSet['code']) ||
+      tSet['postal'] ||
+      tSet['zip']
+    ) {
+      return 'pincode';
+    }
+
+    // 14. LinkedIn Profile
+    if (tSet['linkedin'] || (tSet['linked'] && tSet['in']) || text.indexOf('linkedin') !== -1) {
+      return 'linkedin';
+    }
+
+    // 15. Portfolio / Website / GitHub
+    if (tSet['portfolio'] || tSet['github'] || tSet['website'] || (tSet['personal'] && tSet['site'])) {
+      return 'portfolio';
+    }
+
+    return 'other';
   }
 
   function getDescriptor(el) {
@@ -64,12 +184,12 @@ export function buildAutofillScript(savedFields = []) {
     // Google Forms question container & heading
     var gContainer = el.closest('[role="listitem"], .freebirdFormviewerViewNumberedItemContainer, .geS5n, .m2');
     if (gContainer) {
-      var gHeading = gContainer.querySelector('[role="heading"], .M7eMe, .HoDaOb, span');
+      var gHeading = gContainer.querySelector('[role="heading"], .M7eMe, .HoDaOb');
       if (gHeading) tokens.push(gHeading.innerText || gHeading.textContent || '');
     }
 
     // Standard form-group or field container
-    var fg = el.closest('.form-group, .form-row, .field, [class*="field"], [class*="group"], tr, div');
+    var fg = el.closest('.form-group, .form-row, .field, [class*="field"], [class*="group"], tr');
     if (fg && fg !== document.body) {
       var fgLabel = fg.querySelector('label, [class*="label"], [class*="title"], dt');
       if (fgLabel && fgLabel !== el) tokens.push(fgLabel.innerText || fgLabel.textContent || '');
@@ -78,46 +198,82 @@ export function buildAutofillScript(savedFields = []) {
     return tokens.join(' ').toLowerCase();
   }
 
-  function findMatchingValue(descriptor, fields) {
+  function findMatchingValue(el, descriptor, fields) {
     if (!descriptor || !fields || fields.length === 0) return null;
-    var normDesc = normalize(descriptor);
 
-    // 1. Direct name match against user's saved fields
+    var elTokens = getTokens(descriptor);
+    var elCategory = classifyTokens(elTokens, descriptor);
+
+    // Priority 1: Exact direct match on normalized name
     for (var i = 0; i < fields.length; i++) {
       var f = fields[i];
       if (!f || !f.name || !f.value) continue;
-      var normName = normalize(f.name);
-      if (normName.length >= 3 && normDesc.indexOf(normName) !== -1) {
+      var fTokens = getTokens(f.name);
+      var fCategory = classifyTokens(fTokens, f.name);
+
+      // Strict rule: Never cross-match generic "Name" to "First Name" or "Last Name"
+      if (fCategory === 'fullname' && (elCategory === 'firstname' || elCategory === 'lastname')) {
+        continue;
+      }
+      if (fCategory === 'firstname' && elCategory !== 'firstname') {
+        continue;
+      }
+      if (fCategory === 'lastname' && elCategory !== 'lastname') {
+        continue;
+      }
+
+      var normF = normalize(f.name);
+      var normElName = normalize(el.name || '');
+      var normElPlaceholder = normalize(el.placeholder || '');
+      var normElId = normalize(el.id || '');
+      var normElAria = normalize(el.getAttribute('aria-label') || '');
+
+      if (
+        (normElName && normElName === normF) ||
+        (normElPlaceholder && normElPlaceholder === normF) ||
+        (normElId && normElId === normF) ||
+        (normElAria && normElAria === normF)
+      ) {
         return f.value;
       }
     }
 
-    // 2. Semantic category alias match
-    var keys = Object.keys(ALIAS_MAP);
-    for (var k = 0; k < keys.length; k++) {
-      var cat = keys[k];
-      var aliases = ALIAS_MAP[cat];
+    // Priority 2: Semantic Category Match with strict isolation
+    // firstname ONLY matches firstname
+    // lastname ONLY matches lastname
+    // fullname ONLY matches fullname (never firstname or lastname)
+    if (elCategory !== 'other') {
+      for (var c = 0; c < fields.length; c++) {
+        var sf = fields[c];
+        if (!sf || !sf.name || !sf.value) continue;
+        var sfTokens = getTokens(sf.name);
+        var sfCategory = classifyTokens(sfTokens, sf.name);
 
-      // Check if descriptor matches this category
-      var descMatches = false;
-      for (var a = 0; a < aliases.length; a++) {
-        if (normDesc.indexOf(normalize(aliases[a])) !== -1) {
-          descMatches = true;
-          break;
+        if (sfCategory === elCategory) {
+          return sf.value;
         }
       }
+    }
 
-      if (descMatches) {
-        // Find if user has a saved field matching this category
-        for (var sf = 0; sf < fields.length; sf++) {
-          var saved = fields[sf];
-          if (!saved || !saved.name || !saved.value) continue;
-          var normSavedName = normalize(saved.name);
+    // Priority 3: Custom Field multi-token exact match (for unclassified custom fields)
+    if (elCategory === 'other') {
+      for (var m = 0; m < fields.length; m++) {
+        var cf = fields[m];
+        if (!cf || !cf.name || !cf.value) continue;
+        var cfTokens = getTokens(cf.name);
+        var cfCategory = classifyTokens(cfTokens, cf.name);
+        if (cfCategory !== 'other') continue;
 
-          for (var sa = 0; sa < aliases.length; sa++) {
-            if (normSavedName.indexOf(normalize(aliases[sa])) !== -1) {
-              return saved.value;
+        if (cfTokens.length >= 2) {
+          var allIn = true;
+          for (var t = 0; t < cfTokens.length; t++) {
+            if (elTokens.indexOf(cfTokens[t]) === -1) {
+              allIn = false;
+              break;
             }
+          }
+          if (allIn) {
+            return cf.value;
           }
         }
       }
@@ -195,7 +351,7 @@ export function buildAutofillScript(savedFields = []) {
         return; // invisible element
       }
       var desc = getDescriptor(el);
-      var matchVal = findMatchingValue(desc, fields);
+      var matchVal = findMatchingValue(el, desc, fields);
       if (matchVal) {
         var ok = setInputValue(el, matchVal);
         if (ok) filledCount++;
