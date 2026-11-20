@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "JobMail",
-    "slug": "jobmail",
+    "slug": "autobrowser",
     "scheme": "jobmail",
     "version": "1.0.0",
     "orientation": "portrait",
