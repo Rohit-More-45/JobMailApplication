@@ -80,29 +80,32 @@ export default function JobBotScreen() {
   const [listsModalVisible, setListsModalVisible] = useState(false);
   const [activeListTab, setActiveListTab] = useState('applied'); // 'applied' | 'manual'
 
-  const refreshUIState = useCallback(async () => {
-    const [cfg, jobs, applied, manual, st] = await Promise.all([
-      loadBotConfig(),
+  const refreshLiveLists = useCallback(async () => {
+    const [jobs, applied, manual, st] = await Promise.all([
       loadFoundJobs(),
       loadAppliedJobs(),
       loadManualJobs(),
       loadBotStatus(),
     ]);
-    setConfig(cfg);
     setFoundJobs(jobs);
     setAppliedJobs(applied);
     setManualJobs(manual);
     setStatus(st);
   }, []);
 
+  // Load config ONLY once on mount so user edits are never overwritten
   useEffect(() => {
-    refreshUIState();
-  }, [refreshUIState, botDataVersion]);
+    loadBotConfig().then((cfg) => setConfig(cfg));
+  }, []);
 
   useEffect(() => {
-    const uiTimer = setInterval(refreshUIState, 10000);
+    refreshLiveLists();
+  }, [refreshLiveLists, botDataVersion]);
+
+  useEffect(() => {
+    const uiTimer = setInterval(refreshLiveLists, 10000);
     return () => clearInterval(uiTimer);
-  }, [refreshUIState]);
+  }, [refreshLiveLists]);
 
   const toggleExperienceLevel = useCallback((val) => {
     setConfig((prev) => {
@@ -208,9 +211,9 @@ export default function JobBotScreen() {
   const handleMarkManualAsApplied = useCallback(
     async (job) => {
       await addJobToAppliedList(job, 'Marked applied manually');
-      await refreshUIState();
+      await refreshLiveLists();
     },
-    [refreshUIState]
+    [refreshLiveLists]
   );
 
   const handleClearActiveModalList = useCallback(async () => {
@@ -219,8 +222,8 @@ export default function JobBotScreen() {
     } else {
       await clearManualJobsList();
     }
-    await refreshUIState();
-  }, [activeListTab, refreshUIState]);
+    await refreshLiveLists();
+  }, [activeListTab, refreshLiveLists]);
 
   const modalData = activeListTab === 'applied' ? appliedJobs : manualJobs;
 

@@ -7,7 +7,7 @@ import { Platform } from 'react-native';
 export const LINKEDIN_JOB_MONITOR_TASK = 'JOBMAIL_LINKEDIN_JOB_MONITOR';
 export const FOREGROUND_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
-const CONFIG_KEY = '@JobMail:job_bot_config_v2';
+const CONFIG_KEY = '@JobMail:job_bot_config_v3';
 const SEEN_IDS_KEY = '@JobMail:job_bot_seen_ids';
 const FOUND_JOBS_KEY = '@JobMail:job_bot_found_jobs';
 const APPLIED_JOBS_KEY = '@JobMail:job_bot_applied_jobs';
