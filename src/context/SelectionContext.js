@@ -103,15 +103,19 @@ export function SelectionProvider({ children }) {
     });
   }, []);
 
-  const triggerBotSearch = useCallback((url, { notify = true, showAlert = false } = {}) => {
-    if (!url) return;
-    setSearchRequest({
-      id: Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-      url,
-      notify,
-      showAlert,
-    });
-  }, []);
+  const triggerBotSearch = useCallback(
+    (url, { notify = true, showAlert = false, descriptionKeywords = '' } = {}) => {
+      if (!url) return;
+      setSearchRequest({
+        id: Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        url,
+        notify,
+        showAlert,
+        descriptionKeywords,
+      });
+    },
+    []
+  );
 
   const clearBotSearch = useCallback(() => {
     setSearchRequest(null);

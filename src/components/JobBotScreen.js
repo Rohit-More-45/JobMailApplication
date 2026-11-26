@@ -130,7 +130,11 @@ export default function JobBotScreen() {
 
       if (nextEnabled) {
         const searchUrl = buildLinkedInBrowserSearchUrl(updated);
-        triggerBotSearch(searchUrl, { notify: false, showAlert: false });
+        triggerBotSearch(searchUrl, {
+          notify: false,
+          showAlert: false,
+          descriptionKeywords: updated.descriptionKeywords || '',
+        });
       }
     },
     [config, triggerBotSearch]
@@ -148,7 +152,11 @@ export default function JobBotScreen() {
     await syncBackgroundBotRegistration(updated.enabled);
 
     const searchUrl = buildLinkedInBrowserSearchUrl(updated);
-    triggerBotSearch(searchUrl, { notify: true, showAlert: true });
+    triggerBotSearch(searchUrl, {
+      notify: true,
+      showAlert: true,
+      descriptionKeywords: updated.descriptionKeywords || '',
+    });
   }, [config, triggerBotSearch]);
 
   const handleCheckNow = useCallback(async () => {
@@ -159,7 +167,11 @@ export default function JobBotScreen() {
     const updated = await saveBotConfig(config);
     setConfig(updated);
     const searchUrl = buildLinkedInBrowserSearchUrl(updated);
-    triggerBotSearch(searchUrl, { notify: true, showAlert: true });
+    triggerBotSearch(searchUrl, {
+      notify: true,
+      showAlert: true,
+      descriptionKeywords: updated.descriptionKeywords || '',
+    });
   }, [config, triggerBotSearch]);
 
   const handleOpenSearchInLinkedIn = useCallback(async () => {
@@ -249,7 +261,7 @@ export default function JobBotScreen() {
           <View style={styles.inputRow}>
             <TextInput
               style={[styles.input, { flex: 1.3 }]}
-              placeholder="Keywords (e.g. .NET React)"
+              placeholder="Keywords (e.g. .NET Developer)"
               placeholderTextColor="#94a3b8"
               value={config.keywords}
               onChangeText={(text) => setConfig((prev) => ({ ...prev, keywords: text }))}
@@ -261,6 +273,47 @@ export default function JobBotScreen() {
               value={config.location}
               onChangeText={(text) => setConfig((prev) => ({ ...prev, location: text }))}
             />
+          </View>
+
+          {/* Description Must Contain Words Filter */}
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>
+              Job Description Must Contain (comma-separated)
+            </Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. .net, dotnet (leave empty to show all)"
+              placeholderTextColor="#94a3b8"
+              value={config.descriptionKeywords}
+              onChangeText={(text) =>
+                setConfig((prev) => ({ ...prev, descriptionKeywords: text }))
+              }
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+
+          {/* LinkedIn Easy Apply Filter (f_AL=true) */}
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>LinkedIn Easy Apply Filter</Text>
+            <View style={styles.chipGroup}>
+              <TouchableOpacity
+                style={[styles.chip, config.easyApplyOnly && styles.chipActive]}
+                onPress={() => setConfig((prev) => ({ ...prev, easyApplyOnly: true }))}
+              >
+                <Text style={[styles.chipText, config.easyApplyOnly && styles.chipTextActive]}>
+                  Easy Apply Only (f_AL)
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.chip, !config.easyApplyOnly && styles.chipActive]}
+                onPress={() => setConfig((prev) => ({ ...prev, easyApplyOnly: false }))}
+              >
+                <Text style={[styles.chipText, !config.easyApplyOnly && styles.chipTextActive]}>
+                  All Jobs
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Filter 1: Date Posted (MUST) */}

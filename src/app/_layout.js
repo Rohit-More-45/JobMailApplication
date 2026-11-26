@@ -22,7 +22,7 @@ import {
   syncBackgroundBotRegistration,
 } from '../services/jobMonitorService';
 import { buildEasyApplyScript } from '../scripts/linkedInEasyApplyInjection';
-import { LINKEDIN_SEARCH_EXTRACTION_SCRIPT } from '../scripts/linkedInSearchInjection';
+import { buildSearchExtractionScript } from '../scripts/linkedInSearchInjection';
 
 const SAVED_FIELDS_KEY = '@JobMail:saved_form_fields';
 
@@ -97,7 +97,7 @@ function JobMonitorCoordinator() {
     };
   }, [activeAutoApplyJob, setActiveAutoApplyJob, notifyBotDataUpdated]);
 
-  // Safety timeout for WebView search (22s)
+  // Safety timeout for WebView search (32s to allow description fetching)
   useEffect(() => {
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
@@ -118,7 +118,7 @@ function JobMonitorCoordinator() {
             Alert.alert('Search Complete', `Found ${res.totalFetched || 0} matching jobs.`);
           }
         }
-      }, 22000);
+      }, 32000);
     }
 
     return () => {
@@ -145,11 +145,18 @@ function JobMonitorCoordinator() {
         let res;
 
         if (data.error === 'AUTH_REQUIRED') {
-          // Not logged in inside WebView: try single guest fetch fallback
-          res = await runJobCheckNow({ notify: reqSnapshot.notify });
-        } else {
-          res = await processFetchedJobs(data.jobs || [], { notify: reqSnapshot.notify });
+          await recordBotCheckError('Sign in to LinkedIn tab to use your account for search');
+          notifyBotDataUpdated();
+          if (reqSnapshot.showAlert) {
+            Alert.alert(
+              'LinkedIn Sign-In Needed',
+              'Please sign in to your LinkedIn account in the LinkedIn tab so the bot can search with your account and check job descriptions.'
+            );
+          }
+          return;
         }
+
+        res = await processFetchedJobs(data.jobs || [], { notify: reqSnapshot.notify });
 
         if (cfg.autoApplyEasyApply && res?.easyApplyJobs?.length > 0) {
           enqueueEasyApplyJobs(res.easyApplyJobs);
@@ -206,7 +213,11 @@ function JobMonitorCoordinator() {
       if (!cfg.enabled) return;
       if (!cfg.keywords?.trim() && !cfg.customUrl?.trim()) return;
       const url = buildLinkedInBrowserSearchUrl(cfg);
-      triggerBotSearch(url, { notify: true, showAlert: false });
+      triggerBotSearch(url, {
+        notify: true,
+        showAlert: false,
+        descriptionKeywords: cfg.descriptionKeywords || '',
+      });
     }
 
     async function initMonitor() {
@@ -260,7 +271,7 @@ function JobMonitorCoordinator() {
             domStorageEnabled={true}
             sharedCookiesEnabled={true}
             thirdPartyCookiesEnabled={true}
-            injectedJavaScript={LINKEDIN_SEARCH_EXTRACTION_SCRIPT}
+            injectedJavaScript={buildSearchExtractionScript(searchRequest.descriptionKeywords || '')}
             onMessage={handleSearchWebViewMessage}
             onError={async () => {
               const reqSnapshot = searchRequest;
@@ -318,10 +329,10 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   hiddenRunner: {
     position: 'absolute',
-    width: 1,
-    height: 1,
-    left: -200,
-    top: -200,
+    width: 390,
+    height: 844,
+    left: -5000,
+    top: 0,
     opacity: 0,
     overflow: 'hidden',
   },

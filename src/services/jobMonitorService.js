@@ -37,7 +37,9 @@ export const EXPERIENCE_LEVEL_OPTIONS = [
 export const DEFAULT_BOT_CONFIG = {
   enabled: false,
   autoApplyEasyApply: true,
-  keywords: 'Software Engineer',
+  easyApplyOnly: true, // Uses LinkedIn f_AL=true filter
+  keywords: '.NET Developer',
+  descriptionKeywords: '.net, dotnet',
   location: 'India',
   timeFilter: 'r86400',
   experienceLevels: ['2'], // Entry-level default
@@ -195,7 +197,15 @@ export async function loadBotStatus() {
 
 export function buildLinkedInBrowserSearchUrl(config) {
   if (config.customUrl && config.customUrl.trim().startsWith('http')) {
-    return config.customUrl.trim();
+    try {
+      const parsed = new URL(config.customUrl.trim());
+      if (config.easyApplyOnly) {
+        parsed.searchParams.set('f_AL', 'true');
+      }
+      return parsed.toString();
+    } catch (_e) {
+      return config.customUrl.trim();
+    }
   }
 
   const params = new URLSearchParams();
@@ -214,6 +224,9 @@ export function buildLinkedInBrowserSearchUrl(config) {
   if (config.workType) {
     params.set('f_WT', config.workType);
   }
+  if (config.easyApplyOnly) {
+    params.set('f_AL', 'true');
+  }
   params.set('sortBy', 'DD');
   return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
 }
@@ -224,11 +237,12 @@ export function buildLinkedInGuestSearchUrl(config) {
   if (config.customUrl && config.customUrl.trim().startsWith('http')) {
     try {
       const parsed = new URL(config.customUrl.trim());
-      const allowedParams = ['keywords', 'location', 'f_TPR', 'f_WT', 'f_E', 'geoId'];
+      const allowedParams = ['keywords', 'location', 'f_TPR', 'f_WT', 'f_E', 'f_AL', 'geoId'];
       for (const key of allowedParams) {
         const val = parsed.searchParams.get(key);
         if (val) params.set(key, val);
       }
+      if (config.easyApplyOnly) params.set('f_AL', 'true');
       params.set('sortBy', 'DD');
       params.set('start', '0');
       return `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params.toString()}`;
@@ -249,6 +263,9 @@ export function buildLinkedInGuestSearchUrl(config) {
   }
   if (config.workType) {
     params.set('f_WT', config.workType);
+  }
+  if (config.easyApplyOnly) {
+    params.set('f_AL', 'true');
   }
   params.set('sortBy', 'DD');
   params.set('start', '0');
