@@ -19,6 +19,7 @@ import {
   DATE_POSTED_OPTIONS,
   EXPERIENCE_LEVEL_OPTIONS,
   DEFAULT_BOT_CONFIG,
+  buildLinkedInBrowserSearchUrl,
   loadBotConfig,
   saveBotConfig,
   loadFoundJobs,
@@ -29,7 +30,6 @@ import {
   clearAppliedJobsList,
   clearManualJobsList,
   loadBotStatus,
-  runJobCheckNow,
   resetSeenJobsBaseline,
   syncBackgroundBotRegistration,
   setupJobNotifications,
@@ -56,9 +56,11 @@ export default function JobBotScreen() {
   const insets = useSafeAreaInsets();
   const {
     navigateToJobUrl,
-    enqueueEasyApplyJobs,
     activeAutoApplyJob,
     easyApplyQueue,
+    isSearchingBot,
+    botDataVersion,
+    triggerBotSearch,
   } = useSelection();
 
   const [config, setConfig] = useState(DEFAULT_BOT_CONFIG);
@@ -71,7 +73,6 @@ export default function JobBotScreen() {
     lastNewCount: 0,
     totalChecks: 0,
   });
-  const [checking, setChecking] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Two-list popup modal state
@@ -95,7 +96,10 @@ export default function JobBotScreen() {
 
   useEffect(() => {
     refreshUIState();
-    const uiTimer = setInterval(refreshUIState, 8000);
+  }, [refreshUIState, botDataVersion]);
+
+  useEffect(() => {
+    const uiTimer = setInterval(refreshUIState, 10000);
     return () => clearInterval(uiTimer);
   }, [refreshUIState]);
 
@@ -125,19 +129,11 @@ export default function JobBotScreen() {
       await syncBackgroundBotRegistration(nextEnabled);
 
       if (nextEnabled) {
-        setChecking(true);
-        const res = await runJobCheckNow({ notify: false });
-        setChecking(false);
-        if (updated.autoApplyEasyApply && res.easyApplyJobs?.length > 0) {
-          enqueueEasyApplyJobs(res.easyApplyJobs);
-        }
-        await refreshUIState();
-        if (res.status?.lastError) {
-          Alert.alert('Check Issue', res.status.lastError);
-        }
+        const searchUrl = buildLinkedInBrowserSearchUrl(updated);
+        triggerBotSearch(searchUrl, { notify: false, showAlert: false });
       }
     },
-    [config, refreshUIState, enqueueEasyApplyJobs]
+    [config, triggerBotSearch]
   );
 
   const handleSaveCondition = useCallback(async () => {
@@ -151,40 +147,26 @@ export default function JobBotScreen() {
     setConfig(updated);
     await syncBackgroundBotRegistration(updated.enabled);
 
-    setChecking(true);
-    const res = await runJobCheckNow({ notify: true });
-    setChecking(false);
-    if (updated.autoApplyEasyApply && res.easyApplyJobs?.length > 0) {
-      enqueueEasyApplyJobs(res.easyApplyJobs);
-    }
-    await refreshUIState();
-
-    if (res.status?.lastError) {
-      Alert.alert('Search Error', res.status.lastError);
-    } else {
-      const easyCount = res.easyApplyJobs?.length || 0;
-      Alert.alert(
-        'Filters Saved',
-        `Loaded ${res.totalFetched || 0} matching jobs (${easyCount} Easy Apply queued).`
-      );
-    }
-  }, [config, refreshUIState, enqueueEasyApplyJobs]);
+    const searchUrl = buildLinkedInBrowserSearchUrl(updated);
+    triggerBotSearch(searchUrl, { notify: true, showAlert: true });
+  }, [config, triggerBotSearch]);
 
   const handleCheckNow = useCallback(async () => {
-    setChecking(true);
-    const res = await runJobCheckNow({ notify: true });
-    setChecking(false);
-    if (config.autoApplyEasyApply && res.easyApplyJobs?.length > 0) {
-      enqueueEasyApplyJobs(res.easyApplyJobs);
+    if (!config.keywords.trim() && !config.customUrl.trim()) {
+      Alert.alert('Missing Search Condition', 'Enter job keywords or a LinkedIn search URL.');
+      return;
     }
-    await refreshUIState();
+    const updated = await saveBotConfig(config);
+    setConfig(updated);
+    const searchUrl = buildLinkedInBrowserSearchUrl(updated);
+    triggerBotSearch(searchUrl, { notify: true, showAlert: true });
+  }, [config, triggerBotSearch]);
 
-    if (res.status?.lastError) {
-      Alert.alert('Check Failed', res.status.lastError);
-    } else if (res.newJobs && res.newJobs.length > 0) {
-      Alert.alert('New Jobs Found', `Found ${res.newJobs.length} new matching job(s).`);
-    }
-  }, [config.autoApplyEasyApply, refreshUIState, enqueueEasyApplyJobs]);
+  const handleOpenSearchInLinkedIn = useCallback(async () => {
+    const updated = await saveBotConfig(config);
+    const searchUrl = buildLinkedInBrowserSearchUrl(updated);
+    navigateToJobUrl(searchUrl);
+  }, [config, navigateToJobUrl]);
 
   const handleMarkManualAsApplied = useCallback(
     async (job) => {
@@ -309,7 +291,7 @@ export default function JobBotScreen() {
             </ScrollView>
           </View>
 
-          {/* Filter 2: Experience Level (MUST) */}
+          {/* Filter 2: Experience Level (Exact LinkedIn options) */}
           <View style={styles.filterSection}>
             <Text style={styles.filterLabel}>Experience Level</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -381,7 +363,7 @@ export default function JobBotScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.autoApplySwitchTitle}>Auto-Apply Easy Apply Jobs</Text>
               <Text style={styles.autoApplySwitchSub}>
-                Automatically submits Easy Apply & moves non-Easy Apply to Manual list
+                Uses your LinkedIn tab session to submit Easy Apply & lists others in Manual
               </Text>
             </View>
             <Switch
@@ -421,7 +403,7 @@ export default function JobBotScreen() {
             <TouchableOpacity
               style={styles.saveBtn}
               onPress={handleSaveCondition}
-              disabled={checking}
+              disabled={isSearchingBot}
               activeOpacity={0.85}
             >
               <Ionicons name="checkmark-circle-outline" size={16} color="#ffffff" />
@@ -431,15 +413,26 @@ export default function JobBotScreen() {
             <TouchableOpacity
               style={styles.checkBtn}
               onPress={handleCheckNow}
-              disabled={checking}
+              disabled={isSearchingBot}
               activeOpacity={0.85}
             >
-              {checking ? (
+              {isSearchingBot ? (
                 <ActivityIndicator size="small" color="#0a66c2" />
               ) : (
                 <Ionicons name="refresh" size={16} color="#0a66c2" />
               )}
-              <Text style={styles.checkBtnText}>{checking ? 'Checking...' : 'Check Now'}</Text>
+              <Text style={styles.checkBtnText}>
+                {isSearchingBot ? 'Scanning...' : 'Check Now'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.openBrowserSearchBtn}
+              onPress={handleOpenSearchInLinkedIn}
+              activeOpacity={0.85}
+              accessibilityLabel="Open Search in LinkedIn Tab"
+            >
+              <Ionicons name="open-outline" size={17} color="#0a66c2" />
             </TouchableOpacity>
           </View>
 
@@ -930,6 +923,15 @@ const styles = StyleSheet.create({
     color: '#0a66c2',
     fontSize: 12,
     fontWeight: '700',
+  },
+  openBrowserSearchBtn: {
+    width: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 7,
   },
   statusRow: {
     flexDirection: 'row',

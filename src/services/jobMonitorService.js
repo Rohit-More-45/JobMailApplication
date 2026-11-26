@@ -7,7 +7,7 @@ import { Platform } from 'react-native';
 export const LINKEDIN_JOB_MONITOR_TASK = 'JOBMAIL_LINKEDIN_JOB_MONITOR';
 export const FOREGROUND_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
-const CONFIG_KEY = '@JobMail:job_bot_config';
+const CONFIG_KEY = '@JobMail:job_bot_config_v2';
 const SEEN_IDS_KEY = '@JobMail:job_bot_seen_ids';
 const FOUND_JOBS_KEY = '@JobMail:job_bot_found_jobs';
 const APPLIED_JOBS_KEY = '@JobMail:job_bot_applied_jobs';
@@ -24,12 +24,14 @@ export const DATE_POSTED_OPTIONS = [
   { label: 'Past Month', value: 'r2592000' },
 ];
 
+// Exact LinkedIn experience levels requested:
+// Entry-level (2), Senior (4), Manager (3), Director (5), Executive (6)
 export const EXPERIENCE_LEVEL_OPTIONS = [
-  { label: 'Internship', value: '1' },
-  { label: 'Entry Level', value: '2' },
-  { label: 'Associate', value: '3' },
-  { label: 'Mid-Senior', value: '4' },
+  { label: 'Entry-level', value: '2' },
+  { label: 'Senior', value: '4' },
+  { label: 'Manager', value: '3' },
   { label: 'Director', value: '5' },
+  { label: 'Executive', value: '6' },
 ];
 
 export const DEFAULT_BOT_CONFIG = {
@@ -37,8 +39,8 @@ export const DEFAULT_BOT_CONFIG = {
   autoApplyEasyApply: true,
   keywords: 'Software Engineer',
   location: 'India',
-  timeFilter: 'r86400', // Date Posted
-  experienceLevels: ['2', '3'], // Experience Level (Entry + Associate default)
+  timeFilter: 'r86400',
+  experienceLevels: ['2'], // Entry-level default
   workType: '', // '' = All, '2' = Remote, '3' = Hybrid, '1' = On-site
   customUrl: '',
 };
@@ -158,7 +160,6 @@ export async function addJobToAppliedList(job, note = 'Easy Apply submitted by B
 export async function addJobToManualList(job, note = 'External Apply (Manual)') {
   if (!job || !job.id) return;
   const [applied, manual] = await Promise.all([loadAppliedJobs(), loadManualJobs()]);
-  // Do not downgrade if already applied
   if (applied.some((j) => j.id === job.id)) return;
   const entry = {
     ...job,
@@ -167,12 +168,6 @@ export async function addJobToManualList(job, note = 'External Apply (Manual)') 
   };
   const updatedManual = [entry, ...manual.filter((j) => j.id !== job.id)].slice(0, 100);
   await AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify(updatedManual));
-}
-
-export async function removeJobFromManualList(jobId) {
-  const manual = await loadManualJobs();
-  const updated = manual.filter((j) => j.id !== jobId);
-  await AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify(updated));
 }
 
 export async function clearAppliedJobsList() {
@@ -198,7 +193,32 @@ export async function loadBotStatus() {
   };
 }
 
-export function buildLinkedInGuestSearchUrl(config, { easyApplyOnly = false } = {}) {
+export function buildLinkedInBrowserSearchUrl(config) {
+  if (config.customUrl && config.customUrl.trim().startsWith('http')) {
+    return config.customUrl.trim();
+  }
+
+  const params = new URLSearchParams();
+  if (config.keywords && config.keywords.trim()) {
+    params.set('keywords', config.keywords.trim());
+  }
+  if (config.location && config.location.trim()) {
+    params.set('location', config.location.trim());
+  }
+  if (config.timeFilter) {
+    params.set('f_TPR', config.timeFilter);
+  }
+  if (Array.isArray(config.experienceLevels) && config.experienceLevels.length > 0) {
+    params.set('f_E', config.experienceLevels.join(','));
+  }
+  if (config.workType) {
+    params.set('f_WT', config.workType);
+  }
+  params.set('sortBy', 'DD');
+  return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
+}
+
+export function buildLinkedInGuestSearchUrl(config) {
   const params = new URLSearchParams();
 
   if (config.customUrl && config.customUrl.trim().startsWith('http')) {
@@ -209,7 +229,6 @@ export function buildLinkedInGuestSearchUrl(config, { easyApplyOnly = false } = 
         const val = parsed.searchParams.get(key);
         if (val) params.set(key, val);
       }
-      if (easyApplyOnly) params.set('f_AL', 'true');
       params.set('sortBy', 'DD');
       params.set('start', '0');
       return `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params.toString()}`;
@@ -231,10 +250,7 @@ export function buildLinkedInGuestSearchUrl(config, { easyApplyOnly = false } = 
   if (config.workType) {
     params.set('f_WT', config.workType);
   }
-  if (easyApplyOnly) {
-    params.set('f_AL', 'true');
-  }
-  params.set('sortBy', 'DD'); // Most recent first
+  params.set('sortBy', 'DD');
   params.set('start', '0');
 
   return `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params.toString()}`;
@@ -258,7 +274,7 @@ export function parseLinkedInJobsHtml(html) {
 
   const jobs = [];
   const seenInPage = new Set();
-  const cards = html.split(/<li>/);
+  const cards = html.split(/<li[\s>]/i);
 
   for (const card of cards) {
     const idMatch = card.match(/urn:li:jobPosting:(\d+)/);
@@ -278,6 +294,7 @@ export function parseLinkedInJobsHtml(html) {
     const company = decodeHtmlEntities((companyMatch ? companyMatch[1] : '').replace(/<[^>]+>/g, '')) || 'Company';
     const location = decodeHtmlEntities((locationMatch ? locationMatch[1] : '').replace(/<[^>]+>/g, '')) || '';
     const timeText = decodeHtmlEntities((timeMatch ? timeMatch[1] : '').replace(/<[^>]+>/g, '')) || 'Recently posted';
+    const isEasyApply = /easy apply/i.test(card);
 
     let jobUrl = `https://www.linkedin.com/jobs/view/${id}`;
     if (linkMatch && linkMatch[1]) {
@@ -295,6 +312,7 @@ export function parseLinkedInJobsHtml(html) {
       location,
       timeText,
       url: jobUrl,
+      isEasyApply,
     });
   }
 
@@ -337,6 +355,99 @@ async function sendNewJobsNotification(newJobs) {
   });
 }
 
+/**
+ * Processes an array of extracted jobs (either from logged-in WebView or guest fetch).
+ * Updates seen IDs, foundJobs, Applied/Manual categorization, and sends notifications.
+ */
+export async function processFetchedJobs(fetchedJobs, { notify = true } = {}) {
+  const prevStatus = await loadBotStatus();
+  let seenIds = [];
+  try {
+    const seenRaw = await AsyncStorage.getItem(SEEN_IDS_KEY);
+    if (seenRaw) {
+      const parsed = JSON.parse(seenRaw);
+      if (Array.isArray(parsed)) seenIds = parsed;
+    }
+  } catch (_e) {}
+
+  const seenSet = new Set(seenIds);
+  const isBaseline = seenIds.length === 0;
+  const now = Date.now();
+  let newJobs = [];
+  let easyApplyQueueCandidates = [];
+
+  if (isBaseline) {
+    const baselineIds = fetchedJobs.map((j) => j.id);
+    await AsyncStorage.setItem(SEEN_IDS_KEY, JSON.stringify(baselineIds.slice(0, 300)));
+
+    const initialDisplay = fetchedJobs.slice(0, 25).map((j) => ({
+      ...j,
+      foundAt: now,
+      isNew: false,
+    }));
+    await AsyncStorage.setItem(FOUND_JOBS_KEY, JSON.stringify(initialDisplay));
+
+    for (const job of initialDisplay) {
+      if (!job.isEasyApply) {
+        await addJobToManualList(job, 'Not Easy Apply (Manual)');
+      } else {
+        easyApplyQueueCandidates.push(job);
+      }
+    }
+  } else {
+    newJobs = fetchedJobs
+      .filter((j) => !seenSet.has(j.id))
+      .map((j) => ({
+        ...j,
+        foundAt: now,
+        isNew: true,
+      }));
+
+    if (newJobs.length > 0) {
+      const updatedSeen = [...newJobs.map((j) => j.id), ...seenIds].slice(0, 300);
+      await AsyncStorage.setItem(SEEN_IDS_KEY, JSON.stringify(updatedSeen));
+
+      const existingFound = await loadFoundJobs();
+      const combinedFound = [
+        ...newJobs,
+        ...existingFound.map((j) => ({ ...j, isNew: false })),
+      ].slice(0, 50);
+      await AsyncStorage.setItem(FOUND_JOBS_KEY, JSON.stringify(combinedFound));
+
+      for (const job of newJobs) {
+        if (!job.isEasyApply) {
+          await addJobToManualList(job, 'Not Easy Apply (Manual)');
+        } else {
+          easyApplyQueueCandidates.push(job);
+        }
+      }
+
+      if (notify) {
+        await sendNewJobsNotification(newJobs);
+      }
+    }
+  }
+
+  const nextStatus = {
+    lastCheckedAt: now,
+    lastError: null,
+    lastNewCount: newJobs.length,
+    totalChecks: (prevStatus.totalChecks || 0) + 1,
+  };
+  await AsyncStorage.setItem(STATUS_KEY, JSON.stringify(nextStatus));
+
+  return {
+    newJobs,
+    easyApplyJobs: easyApplyQueueCandidates,
+    totalFetched: fetchedJobs.length,
+    isBaseline,
+    status: nextStatus,
+  };
+}
+
+/**
+ * Single-request guest fetch fallback (used in headless background WorkManager or when WebView isn't logged in).
+ */
 export async function runJobCheckNow({ notify = true } = {}) {
   const config = await loadBotConfig();
   const prevStatus = await loadBotStatus();
@@ -349,120 +460,31 @@ export async function runJobCheckNow({ notify = true } = {}) {
       lastNewCount: 0,
     };
     await AsyncStorage.setItem(STATUS_KEY, JSON.stringify(errStatus));
-    return { newJobs: [], easyApplyJobs: [], status: errStatus };
+    return { newJobs: [], easyApplyJobs: [], totalFetched: 0, status: errStatus };
   }
 
   try {
-    const headers = {
-      'User-Agent': USER_AGENT,
-      Accept: 'text/html,application/xhtml+xml',
-      'Accept-Language': 'en-US,en;q=0.9',
-    };
+    const searchUrl = buildLinkedInGuestSearchUrl(config);
+    const response = await fetch(searchUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
 
-    const allUrl = buildLinkedInGuestSearchUrl(config, { easyApplyOnly: false });
-    const easyUrl = buildLinkedInGuestSearchUrl(config, { easyApplyOnly: true });
-
-    const [allRes, easyRes] = await Promise.all([
-      fetch(allUrl, { method: 'GET', headers }),
-      fetch(easyUrl, { method: 'GET', headers }).catch(() => null),
-    ]);
-
-    if (!allRes.ok) {
-      throw new Error(`LinkedIn returned HTTP ${allRes.status}`);
+    if (!response.ok) {
+      throw new Error(
+        response.status === 429
+          ? 'LinkedIn rate-limited guest request (429). Sign in to LinkedIn tab for browser search.'
+          : `LinkedIn returned HTTP ${response.status}`
+      );
     }
 
-    const allHtml = await allRes.text();
-    const easyHtml = easyRes && easyRes.ok ? await easyRes.text() : '';
-
-    const easyJobIds = new Set(parseLinkedInJobsHtml(easyHtml).map((j) => j.id));
-    const fetchedJobs = parseLinkedInJobsHtml(allHtml).map((j) => ({
-      ...j,
-      isEasyApply: easyJobIds.has(j.id),
-    }));
-
-    let seenIds = [];
-    try {
-      const seenRaw = await AsyncStorage.getItem(SEEN_IDS_KEY);
-      if (seenRaw) {
-        const parsed = JSON.parse(seenRaw);
-        if (Array.isArray(parsed)) seenIds = parsed;
-      }
-    } catch (_e) {}
-
-    const seenSet = new Set(seenIds);
-    const isBaseline = seenIds.length === 0;
-    const now = Date.now();
-    let newJobs = [];
-    let easyApplyQueueCandidates = [];
-
-    if (isBaseline) {
-      const baselineIds = fetchedJobs.map((j) => j.id);
-      await AsyncStorage.setItem(SEEN_IDS_KEY, JSON.stringify(baselineIds.slice(0, 300)));
-
-      const initialDisplay = fetchedJobs.slice(0, 20).map((j) => ({
-        ...j,
-        foundAt: now,
-        isNew: false,
-      }));
-      await AsyncStorage.setItem(FOUND_JOBS_KEY, JSON.stringify(initialDisplay));
-
-      // Categorize initial jobs into Manual vs Easy Apply queue
-      for (const job of initialDisplay) {
-        if (!job.isEasyApply) {
-          await addJobToManualList(job, 'Not Easy Apply (Manual)');
-        } else {
-          easyApplyQueueCandidates.push(job);
-        }
-      }
-    } else {
-      newJobs = fetchedJobs
-        .filter((j) => !seenSet.has(j.id))
-        .map((j) => ({
-          ...j,
-          foundAt: now,
-          isNew: true,
-        }));
-
-      if (newJobs.length > 0) {
-        const updatedSeen = [...newJobs.map((j) => j.id), ...seenIds].slice(0, 300);
-        await AsyncStorage.setItem(SEEN_IDS_KEY, JSON.stringify(updatedSeen));
-
-        const existingFound = await loadFoundJobs();
-        const combinedFound = [
-          ...newJobs,
-          ...existingFound.map((j) => ({ ...j, isNew: false })),
-        ].slice(0, 50);
-        await AsyncStorage.setItem(FOUND_JOBS_KEY, JSON.stringify(combinedFound));
-
-        for (const job of newJobs) {
-          if (!job.isEasyApply) {
-            await addJobToManualList(job, 'Not Easy Apply (Manual)');
-          } else {
-            easyApplyQueueCandidates.push(job);
-          }
-        }
-
-        if (notify) {
-          await sendNewJobsNotification(newJobs);
-        }
-      }
-    }
-
-    const nextStatus = {
-      lastCheckedAt: now,
-      lastError: null,
-      lastNewCount: newJobs.length,
-      totalChecks: (prevStatus.totalChecks || 0) + 1,
-    };
-    await AsyncStorage.setItem(STATUS_KEY, JSON.stringify(nextStatus));
-
-    return {
-      newJobs,
-      easyApplyJobs: easyApplyQueueCandidates,
-      totalFetched: fetchedJobs.length,
-      isBaseline,
-      status: nextStatus,
-    };
+    const html = await response.text();
+    const fetchedJobs = parseLinkedInJobsHtml(html);
+    return await processFetchedJobs(fetchedJobs, { notify });
   } catch (err) {
     const errStatus = {
       ...prevStatus,
@@ -472,8 +494,21 @@ export async function runJobCheckNow({ notify = true } = {}) {
       totalChecks: (prevStatus.totalChecks || 0) + 1,
     };
     await AsyncStorage.setItem(STATUS_KEY, JSON.stringify(errStatus));
-    return { newJobs: [], easyApplyJobs: [], status: errStatus };
+    return { newJobs: [], easyApplyJobs: [], totalFetched: 0, status: errStatus };
   }
+}
+
+export async function recordBotCheckError(message) {
+  const prevStatus = await loadBotStatus();
+  const errStatus = {
+    ...prevStatus,
+    lastCheckedAt: Date.now(),
+    lastError: message,
+    lastNewCount: 0,
+    totalChecks: (prevStatus.totalChecks || 0) + 1,
+  };
+  await AsyncStorage.setItem(STATUS_KEY, JSON.stringify(errStatus));
+  return errStatus;
 }
 
 export async function resetSeenJobsBaseline() {

@@ -19,6 +19,12 @@ const SelectionContext = createContext({
   enqueueEasyApplyJobs: () => {},
   setActiveAutoApplyJob: () => {},
   popNextAutoApplyJob: () => {},
+  searchRequest: null,
+  isSearchingBot: false,
+  botDataVersion: 0,
+  triggerBotSearch: () => {},
+  clearBotSearch: () => {},
+  notifyBotDataUpdated: () => {},
 });
 
 export function SelectionProvider({ children }) {
@@ -27,6 +33,8 @@ export function SelectionProvider({ children }) {
   const [externalJobUrl, setExternalJobUrl] = useState(null);
   const [easyApplyQueue, setEasyApplyQueue] = useState([]);
   const [activeAutoApplyJob, setActiveAutoApplyJob] = useState(null);
+  const [searchRequest, setSearchRequest] = useState(null);
+  const [botDataVersion, setBotDataVersion] = useState(0);
   const webViewRef = useRef(null);
 
   const registerWebView = useCallback((ref) => {
@@ -95,6 +103,24 @@ export function SelectionProvider({ children }) {
     });
   }, []);
 
+  const triggerBotSearch = useCallback((url, { notify = true, showAlert = false } = {}) => {
+    if (!url) return;
+    setSearchRequest({
+      id: Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      url,
+      notify,
+      showAlert,
+    });
+  }, []);
+
+  const clearBotSearch = useCallback(() => {
+    setSearchRequest(null);
+  }, []);
+
+  const notifyBotDataUpdated = useCallback(() => {
+    setBotDataVersion((v) => v + 1);
+  }, []);
+
   return (
     <SelectionContext.Provider
       value={{
@@ -115,6 +141,12 @@ export function SelectionProvider({ children }) {
         enqueueEasyApplyJobs,
         setActiveAutoApplyJob,
         popNextAutoApplyJob,
+        searchRequest,
+        isSearchingBot: searchRequest !== null,
+        botDataVersion,
+        triggerBotSearch,
+        clearBotSearch,
+        notifyBotDataUpdated,
       }}
     >
       {children}

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, View, StyleSheet, Platform } from 'react-native';
+import { AppState, View, StyleSheet, Platform, Alert } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -11,14 +11,18 @@ import {
   FOREGROUND_CHECK_INTERVAL_MS,
   addJobToAppliedList,
   addJobToManualList,
+  buildLinkedInBrowserSearchUrl,
   loadBotConfig,
   loadBotStatus,
+  processFetchedJobs,
+  recordBotCheckError,
   runJobCheckNow,
   sendBotNotification,
   setupJobNotifications,
   syncBackgroundBotRegistration,
 } from '../services/jobMonitorService';
 import { buildEasyApplyScript } from '../scripts/linkedInEasyApplyInjection';
+import { LINKEDIN_SEARCH_EXTRACTION_SCRIPT } from '../scripts/linkedInSearchInjection';
 
 const SAVED_FIELDS_KEY = '@JobMail:saved_form_fields';
 
@@ -38,10 +42,14 @@ function JobMonitorCoordinator() {
     enqueueEasyApplyJobs,
     setActiveAutoApplyJob,
     popNextAutoApplyJob,
+    searchRequest,
+    triggerBotSearch,
+    clearBotSearch,
+    notifyBotDataUpdated,
   } = useSelection();
 
-  const hiddenWebViewRef = useRef(null);
-  const timeoutRef = useRef(null);
+  const applyTimeoutRef = useRef(null);
+  const searchTimeoutRef = useRef(null);
   const [savedFields, setSavedFields] = useState([]);
 
   // Load saved autofill fields for Easy Apply forms
@@ -67,26 +75,101 @@ function JobMonitorCoordinator() {
 
   // Safety timeout per Easy Apply job (28s)
   useEffect(() => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
+    if (applyTimeoutRef.current) {
+      clearTimeout(applyTimeoutRef.current);
+      applyTimeoutRef.current = null;
     }
 
     if (activeAutoApplyJob) {
       const jobSnapshot = activeAutoApplyJob;
-      timeoutRef.current = setTimeout(async () => {
+      applyTimeoutRef.current = setTimeout(async () => {
         await addJobToManualList(jobSnapshot, 'Timed out — apply manually');
         setActiveAutoApplyJob(null);
+        notifyBotDataUpdated();
       }, 28000);
     }
 
     return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+      if (applyTimeoutRef.current) {
+        clearTimeout(applyTimeoutRef.current);
+        applyTimeoutRef.current = null;
       }
     };
-  }, [activeAutoApplyJob, setActiveAutoApplyJob]);
+  }, [activeAutoApplyJob, setActiveAutoApplyJob, notifyBotDataUpdated]);
+
+  // Safety timeout for WebView search (22s)
+  useEffect(() => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
+
+    if (searchRequest) {
+      const reqSnapshot = searchRequest;
+      searchTimeoutRef.current = setTimeout(async () => {
+        clearBotSearch();
+        // Fallback to single guest fetch if WebView timed out
+        const res = await runJobCheckNow({ notify: reqSnapshot.notify });
+        notifyBotDataUpdated();
+        if (reqSnapshot.showAlert) {
+          if (res.status?.lastError) {
+            Alert.alert('Search Issue', res.status.lastError);
+          } else {
+            Alert.alert('Search Complete', `Found ${res.totalFetched || 0} matching jobs.`);
+          }
+        }
+      }, 22000);
+    }
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+        searchTimeoutRef.current = null;
+      }
+    };
+  }, [searchRequest, clearBotSearch, notifyBotDataUpdated]);
+
+  const handleSearchWebViewMessage = async (event) => {
+    if (!searchRequest) return;
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data && data.type === 'JOB_SEARCH_RESULTS') {
+        const reqSnapshot = searchRequest;
+        if (searchTimeoutRef.current) {
+          clearTimeout(searchTimeoutRef.current);
+          searchTimeoutRef.current = null;
+        }
+        clearBotSearch();
+
+        const cfg = await loadBotConfig();
+        let res;
+
+        if (data.error === 'AUTH_REQUIRED') {
+          // Not logged in inside WebView: try single guest fetch fallback
+          res = await runJobCheckNow({ notify: reqSnapshot.notify });
+        } else {
+          res = await processFetchedJobs(data.jobs || [], { notify: reqSnapshot.notify });
+        }
+
+        if (cfg.autoApplyEasyApply && res?.easyApplyJobs?.length > 0) {
+          enqueueEasyApplyJobs(res.easyApplyJobs);
+        }
+        notifyBotDataUpdated();
+
+        if (reqSnapshot.showAlert) {
+          if (res?.status?.lastError) {
+            Alert.alert('Search Issue', res.status.lastError);
+          } else {
+            const easyCount = (res?.easyApplyJobs || []).length;
+            Alert.alert(
+              'LinkedIn Search Complete',
+              `Found ${res?.totalFetched || 0} matching jobs${easyCount > 0 ? ` (${easyCount} Easy Apply)` : ''}.`
+            );
+          }
+        }
+      }
+    } catch (_e) {}
+  };
 
   const handleEasyApplyMessage = async (event) => {
     if (!activeAutoApplyJob) return;
@@ -94,9 +177,9 @@ function JobMonitorCoordinator() {
       const data = JSON.parse(event.nativeEvent.data);
       if (data && data.type === 'EASY_APPLY_RESULT') {
         const job = activeAutoApplyJob;
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current);
-          timeoutRef.current = null;
+        if (applyTimeoutRef.current) {
+          clearTimeout(applyTimeoutRef.current);
+          applyTimeoutRef.current = null;
         }
         setActiveAutoApplyJob(null);
 
@@ -110,6 +193,7 @@ function JobMonitorCoordinator() {
         } else {
           await addJobToManualList(job, data.reason || 'Manual apply needed');
         }
+        notifyBotDataUpdated();
       }
     } catch (_e) {}
   };
@@ -117,13 +201,12 @@ function JobMonitorCoordinator() {
   useEffect(() => {
     let intervalId = null;
 
-    async function runAndQueue() {
+    async function runForegroundSearch() {
       const cfg = await loadBotConfig();
       if (!cfg.enabled) return;
-      const res = await runJobCheckNow({ notify: true });
-      if (cfg.autoApplyEasyApply && res?.easyApplyJobs?.length > 0) {
-        enqueueEasyApplyJobs(res.easyApplyJobs);
-      }
+      if (!cfg.keywords?.trim() && !cfg.customUrl?.trim()) return;
+      const url = buildLinkedInBrowserSearchUrl(cfg);
+      triggerBotSearch(url, { notify: true, showAlert: false });
     }
 
     async function initMonitor() {
@@ -133,7 +216,7 @@ function JobMonitorCoordinator() {
         await syncBackgroundBotRegistration(true);
       }
 
-      intervalId = setInterval(runAndQueue, FOREGROUND_CHECK_INTERVAL_MS);
+      intervalId = setInterval(runForegroundSearch, FOREGROUND_CHECK_INTERVAL_MS);
     }
 
     initMonitor();
@@ -145,7 +228,7 @@ function JobMonitorCoordinator() {
         const st = await loadBotStatus();
         const elapsed = Date.now() - (st.lastCheckedAt || 0);
         if (elapsed >= FOREGROUND_CHECK_INTERVAL_MS) {
-          await runAndQueue();
+          await runForegroundSearch();
         }
       }
     });
@@ -162,30 +245,59 @@ function JobMonitorCoordinator() {
       appStateSub.remove();
       notifSub.remove();
     };
-  }, [navigateToJobUrl, enqueueEasyApplyJobs]);
-
-  if (!activeAutoApplyJob) return null;
+  }, [navigateToJobUrl, triggerBotSearch]);
 
   return (
-    <View style={styles.hiddenRunner} pointerEvents="none">
-      <WebView
-        key={activeAutoApplyJob.id}
-        ref={hiddenWebViewRef}
-        source={{ uri: activeAutoApplyJob.url }}
-        userAgent={CUSTOM_USER_AGENT}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        sharedCookiesEnabled={true}
-        thirdPartyCookiesEnabled={true}
-        injectedJavaScript={buildEasyApplyScript(savedFields)}
-        onMessage={handleEasyApplyMessage}
-        onError={async () => {
-          const job = activeAutoApplyJob;
-          setActiveAutoApplyJob(null);
-          await addJobToManualList(job, 'Page load failed — apply manually');
-        }}
-      />
-    </View>
+    <>
+      {/* Hidden WebView 1: Logged-In LinkedIn Browser Search Extractor */}
+      {searchRequest && (
+        <View style={styles.hiddenRunner} pointerEvents="none">
+          <WebView
+            key={searchRequest.id}
+            source={{ uri: searchRequest.url }}
+            userAgent={CUSTOM_USER_AGENT}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            sharedCookiesEnabled={true}
+            thirdPartyCookiesEnabled={true}
+            injectedJavaScript={LINKEDIN_SEARCH_EXTRACTION_SCRIPT}
+            onMessage={handleSearchWebViewMessage}
+            onError={async () => {
+              const reqSnapshot = searchRequest;
+              clearBotSearch();
+              await recordBotCheckError('WebView search failed to load');
+              notifyBotDataUpdated();
+              if (reqSnapshot.showAlert) {
+                Alert.alert('Search Error', 'Could not load LinkedIn search page.');
+              }
+            }}
+          />
+        </View>
+      )}
+
+      {/* Hidden WebView 2: Easy Apply Auto-Apply Runner */}
+      {activeAutoApplyJob && (
+        <View style={styles.hiddenRunner} pointerEvents="none">
+          <WebView
+            key={activeAutoApplyJob.id}
+            source={{ uri: activeAutoApplyJob.url }}
+            userAgent={CUSTOM_USER_AGENT}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            sharedCookiesEnabled={true}
+            thirdPartyCookiesEnabled={true}
+            injectedJavaScript={buildEasyApplyScript(savedFields)}
+            onMessage={handleEasyApplyMessage}
+            onError={async () => {
+              const job = activeAutoApplyJob;
+              setActiveAutoApplyJob(null);
+              await addJobToManualList(job, 'Page load failed — apply manually');
+              notifyBotDataUpdated();
+            }}
+          />
+        </View>
+      )}
+    </>
   );
 }
 
