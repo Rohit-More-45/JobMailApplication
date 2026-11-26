@@ -14,12 +14,19 @@ const SelectionContext = createContext({
   externalJobUrl: null,
   navigateToJobUrl: () => {},
   clearExternalJobUrl: () => {},
+  easyApplyQueue: [],
+  activeAutoApplyJob: null,
+  enqueueEasyApplyJobs: () => {},
+  setActiveAutoApplyJob: () => {},
+  popNextAutoApplyJob: () => {},
 });
 
 export function SelectionProvider({ children }) {
   const [selectedPostId, setSelectedPostId] = useState(null);
   const [screenshots, setScreenshots] = useState([]);
   const [externalJobUrl, setExternalJobUrl] = useState(null);
+  const [easyApplyQueue, setEasyApplyQueue] = useState([]);
+  const [activeAutoApplyJob, setActiveAutoApplyJob] = useState(null);
   const webViewRef = useRef(null);
 
   const registerWebView = useCallback((ref) => {
@@ -67,6 +74,27 @@ export function SelectionProvider({ children }) {
     setExternalJobUrl(null);
   }, []);
 
+  const enqueueEasyApplyJobs = useCallback((jobs) => {
+    if (!Array.isArray(jobs) || jobs.length === 0) return;
+    setEasyApplyQueue((prev) => {
+      const existingIds = new Set(prev.map((j) => j.id));
+      const fresh = jobs.filter((j) => j && j.id && !existingIds.has(j.id));
+      return fresh.length > 0 ? [...prev, ...fresh] : prev;
+    });
+  }, []);
+
+  const popNextAutoApplyJob = useCallback(() => {
+    setEasyApplyQueue((prev) => {
+      if (prev.length === 0) {
+        setActiveAutoApplyJob(null);
+        return prev;
+      }
+      const [next, ...rest] = prev;
+      setActiveAutoApplyJob(next);
+      return rest;
+    });
+  }, []);
+
   return (
     <SelectionContext.Provider
       value={{
@@ -82,6 +110,11 @@ export function SelectionProvider({ children }) {
         externalJobUrl,
         navigateToJobUrl,
         clearExternalJobUrl,
+        easyApplyQueue,
+        activeAutoApplyJob,
+        enqueueEasyApplyJobs,
+        setActiveAutoApplyJob,
+        popNextAutoApplyJob,
       }}
     >
       {children}
