@@ -38,8 +38,8 @@ export const DEFAULT_BOT_CONFIG = {
   enabled: false,
   autoApplyEasyApply: true,
   easyApplyOnly: true, // Uses LinkedIn f_AL=true filter
-  keywords: '.NET Developer',
-  descriptionKeywords: '.net, dotnet',
+  keywords: 'Software Engineer',
+  descriptionKeywords: '', // Optional Boolean group condition, e.g. (.net OR dotnet) AND angular
   location: 'India',
   timeFilter: 'r86400',
   experienceLevels: ['2'], // Entry-level default

@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useSelection } from '../context/SelectionContext';
+import { parseBooleanExpression } from '../utils/booleanFilter';
 import {
   DATE_POSTED_OPTIONS,
   EXPERIENCE_LEVEL_OPTIONS,
@@ -146,6 +147,12 @@ export default function JobBotScreen() {
       return;
     }
 
+    const parsedCond = parseBooleanExpression(config.descriptionKeywords || '');
+    if (!parsedCond.valid) {
+      Alert.alert('Invalid Description Condition', parsedCond.error || 'Check parentheses and AND / OR operators.');
+      return;
+    }
+
     await resetSeenJobsBaseline();
     const updated = await saveBotConfig(config);
     setConfig(updated);
@@ -164,6 +171,13 @@ export default function JobBotScreen() {
       Alert.alert('Missing Search Condition', 'Enter job keywords or a LinkedIn search URL.');
       return;
     }
+
+    const parsedCond = parseBooleanExpression(config.descriptionKeywords || '');
+    if (!parsedCond.valid) {
+      Alert.alert('Invalid Description Condition', parsedCond.error || 'Check parentheses and AND / OR operators.');
+      return;
+    }
+
     const updated = await saveBotConfig(config);
     setConfig(updated);
     const searchUrl = buildLinkedInBrowserSearchUrl(updated);
@@ -173,6 +187,17 @@ export default function JobBotScreen() {
       descriptionKeywords: updated.descriptionKeywords || '',
     });
   }, [config, triggerBotSearch]);
+
+  const appendConditionToken = useCallback((token) => {
+    setConfig((prev) => {
+      const current = (prev.descriptionKeywords || '').trimEnd();
+      const needsSpace = current.length > 0 && !current.endsWith('(') && token !== ')';
+      const next = (current + (needsSpace ? ' ' : '') + token).trimStart();
+      return { ...prev, descriptionKeywords: next };
+    });
+  }, []);
+
+  const conditionValidation = parseBooleanExpression(config.descriptionKeywords || '');
 
   const handleOpenSearchInLinkedIn = useCallback(async () => {
     const updated = await saveBotConfig(config);
@@ -275,14 +300,29 @@ export default function JobBotScreen() {
             />
           </View>
 
-          {/* Description Must Contain Words Filter */}
+          {/* Description Boolean Group Condition Filter (Optional) */}
           <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>
-              Job Description Must Contain (comma-separated)
-            </Text>
+            <View style={styles.conditionLabelRow}>
+              <Text style={styles.filterLabel}>Description Condition (Optional)</Text>
+              {config.descriptionKeywords?.trim() ? (
+                <Text
+                  style={
+                    conditionValidation.valid ? styles.condValidText : styles.condErrorText
+                  }
+                >
+                  {conditionValidation.valid ? '✓ Valid' : `⚠ ${conditionValidation.error}`}
+                </Text>
+              ) : null}
+            </View>
+
             <TextInput
-              style={styles.input}
-              placeholder="e.g. .net, dotnet (leave empty to show all)"
+              style={[
+                styles.input,
+                config.descriptionKeywords?.trim() &&
+                  !conditionValidation.valid &&
+                  styles.inputError,
+              ]}
+              placeholder="e.g. (.net OR dotnet) AND angular"
               placeholderTextColor="#94a3b8"
               value={config.descriptionKeywords}
               onChangeText={(text) =>
@@ -291,6 +331,29 @@ export default function JobBotScreen() {
               autoCapitalize="none"
               autoCorrect={false}
             />
+
+            {/* Quick Operator Helper Buttons */}
+            <View style={styles.operatorRow}>
+              {['(', ')', 'AND', 'OR', 'NOT'].map((op) => (
+                <TouchableOpacity
+                  key={op}
+                  style={styles.opBtn}
+                  onPress={() => appendConditionToken(op)}
+                >
+                  <Text style={styles.opBtnText}>{op}</Text>
+                </TouchableOpacity>
+              ))}
+              {config.descriptionKeywords?.length > 0 && (
+                <TouchableOpacity
+                  style={styles.opClearBtn}
+                  onPress={() =>
+                    setConfig((prev) => ({ ...prev, descriptionKeywords: '' }))
+                  }
+                >
+                  <Text style={styles.opClearBtnText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
 
           {/* LinkedIn Easy Apply Filter (f_AL=true) */}
@@ -877,6 +940,57 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     fontSize: 12,
     color: '#0f172a',
+  },
+  inputError: {
+    borderColor: '#ef4444',
+  },
+  conditionLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  condValidText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#10a37f',
+  },
+  condErrorText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ef4444',
+  },
+  operatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 2,
+  },
+  opBtn: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  opBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#0a66c2',
+  },
+  opClearBtn: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  opClearBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ef4444',
   },
   filterSection: {
     gap: 4,

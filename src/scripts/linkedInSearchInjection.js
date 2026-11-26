@@ -1,61 +1,53 @@
+import { parseBooleanExpression } from '../utils/booleanFilter';
+
 /**
  * JobMail - LinkedIn Logged-In Job Search & Description Extractor
  *
  * Runs inside a WebView sharing cookies with the user's logged-in LinkedIn tab.
  * 1. Extracts job cards from https://www.linkedin.com/jobs/search/...
- * 2. Fetches each job's full description using the logged-in session (same-origin fetch).
- * 3. Filters jobs so ONLY jobs whose title or description contains the required terms
- *    (e.g. ".net", "dotnet") are returned.
+ * 2. If a Boolean description condition AST is provided, fetches each job's description
+ *    using the logged-in session and evaluates the group condition (AND / OR / NOT / parentheses).
  * No AI used.
  */
 
-export function buildSearchExtractionScript(mustContainStr = '') {
-  const mustJson = JSON.stringify(mustContainStr || '');
+export function buildSearchExtractionScript(descriptionCondition = '') {
+  const parsed = parseBooleanExpression(descriptionCondition || '');
+  const astJson = JSON.stringify(parsed.valid ? parsed.ast : null);
 
   return `
 (function() {
   if (window.__jobmailSearchExtracting) return;
   window.__jobmailSearchExtracting = true;
 
-  var mustContainRaw = ${mustJson};
+  var conditionAst = ${astJson};
   var done = false;
   var attempts = 0;
   var maxAttempts = 20;
-
-  function parseTerms(raw) {
-    if (!raw || typeof raw !== 'string') return [];
-    return raw
-      .split(',')
-      .map(function(s) { return s.trim().toLowerCase(); })
-      .filter(function(s) { return s.length > 0; });
-  }
 
   function escapeRegExp(str) {
     return str.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
   }
 
-  function matchesTerms(text, terms) {
-    if (!terms || terms.length === 0) return true;
+  function matchTerm(text, term) {
+    if (!term) return true;
     var hay = (text || '').toLowerCase();
-    for (var i = 0; i < terms.length; i++) {
-      var term = terms[i];
-      if (term.charAt(0) === '.') {
-        // Dot-prefixed terms like ".net": match "asp.net", "vb.net", ".net", ".net/angular", but not ".network"
-        var dotRe = new RegExp(escapeRegExp(term) + '(?=$|[^a-z0-9])', 'i');
-        if (dotRe.test(hay)) {
-          return true;
-        }
-      } else {
-        var re = new RegExp('(?:^|[^a-z0-9])' + escapeRegExp(term) + '(?=$|[^a-z0-9])', 'i');
-        if (re.test(hay)) {
-          return true;
-        }
-        if (term.length >= 4 && hay.indexOf(term) !== -1) {
-          return true;
-        }
-      }
+    var t = term.trim().toLowerCase();
+    if (!t) return true;
+    if (t.charAt(0) === '.') {
+      var dotRe = new RegExp(escapeRegExp(t) + '(?=$|[^a-z0-9])', 'i');
+      return dotRe.test(hay);
     }
-    return false;
+    var re = new RegExp('(?:^|[^a-z0-9])' + escapeRegExp(t) + '(?=$|[^a-z0-9])', 'i');
+    return re.test(hay);
+  }
+
+  function evaluateAst(ast, text) {
+    if (!ast) return true;
+    if (ast.type === 'TERM') return matchTerm(text, ast.value);
+    if (ast.type === 'NOT') return !evaluateAst(ast.operand, text);
+    if (ast.type === 'AND') return evaluateAst(ast.left, text) && evaluateAst(ast.right, text);
+    if (ast.type === 'OR') return evaluateAst(ast.left, text) || evaluateAst(ast.right, text);
+    return true;
   }
 
   function postResults(jobs, error) {
@@ -167,7 +159,6 @@ export function buildSearchExtractionScript(mustContainStr = '') {
       tryAddCard(card, null);
     });
 
-    // Mobile/SPA fallback: scan all /jobs/view/ links directly if card selectors didn't catch them
     if (jobs.length === 0) {
       var links = document.querySelectorAll('a[href*="/jobs/view/"]');
       links.forEach(function(a) {
@@ -196,7 +187,6 @@ export function buildSearchExtractionScript(mustContainStr = '') {
   }
 
   function fetchDescriptionForJob(job) {
-    // Use logged-in same-origin fetch first, fallback to guest jobPosting endpoint
     return fetch('https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/' + job.id, {
       credentials: 'include'
     })
@@ -222,14 +212,12 @@ export function buildSearchExtractionScript(mustContainStr = '') {
       });
   }
 
-  function filterJobsByDescription(jobs) {
-    var terms = parseTerms(mustContainRaw);
-    if (!terms.length || !jobs.length) {
+  function filterJobsByCondition(jobs) {
+    if (!conditionAst || !jobs.length) {
       postResults(jobs, null);
       return;
     }
 
-    // Check top 15 jobs in small batches of 5 so it stays fast and avoids rate limits
     var candidates = jobs.slice(0, 15);
     var matched = [];
     var idx = 0;
@@ -248,7 +236,7 @@ export function buildSearchExtractionScript(mustContainStr = '') {
         batch.map(function(job) {
           return fetchDescriptionForJob(job).then(function(detail) {
             var combinedText = job.title + ' ' + job.company + ' ' + detail.text;
-            if (matchesTerms(combinedText, terms)) {
+            if (evaluateAst(conditionAst, combinedText)) {
               job.isEasyApply = detail.isEasyApply;
               matched.push(job);
             }
@@ -284,7 +272,6 @@ export function buildSearchExtractionScript(mustContainStr = '') {
       return;
     }
 
-    // Scroll list container slightly to trigger lazy rendering of job cards
     try {
       var listEl = document.querySelector('.jobs-search-results-list, main, body');
       if (listEl && listEl.scrollTop !== undefined) {
@@ -296,10 +283,10 @@ export function buildSearchExtractionScript(mustContainStr = '') {
     if (jobs.length > 0) {
       if (attempts < 4) {
         setTimeout(function() {
-          filterJobsByDescription(extractCards());
+          filterJobsByCondition(extractCards());
         }, 900);
       } else {
-        filterJobsByDescription(jobs);
+        filterJobsByCondition(jobs);
       }
       return;
     }
@@ -313,7 +300,6 @@ export function buildSearchExtractionScript(mustContainStr = '') {
 
   setTimeout(poll, 1400);
 
-  // Hard safety timeout (28s)
   setTimeout(function() {
     if (!done) {
       postResults([], 'SEARCH_TIMEOUT');
