@@ -1,6 +1,6 @@
 import React from 'react';
-import UnfortunatelyHiredBrowser from '../../components/UnfortunatelyHiredBrowser';
+import HiringCafeBrowser from '../../components/HiringCafeBrowser';
 
-export default function UnfortunatelyHiredScreen() {
-  return <UnfortunatelyHiredBrowser />;
+export default function HiringCafeScreen() {
+  return <HiringCafeBrowser />;
 }

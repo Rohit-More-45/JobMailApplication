@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useSelection } from '../context/SelectionContext';
 
-const UNFORTUNATELY_HIRED_URL = 'https://unfortunatelyhired.com/';
+const HIRING_CAFE_URL = 'https://hiringcafe.com/';
 
 const CUSTOM_USER_AGENT = Platform.select({
   android:
@@ -27,10 +27,10 @@ const CUSTOM_USER_AGENT = Platform.select({
  * Script to intercept window.open and target="_blank" links
  * ensuring they pass through onShouldStartLoadWithRequest.
  */
-const UH_INJECTION_SCRIPT = `
+const HC_INJECTION_SCRIPT = `
 (function() {
-  if (window.__uhInjected) return;
-  window.__uhInjected = true;
+  if (window.__hcInjected) return;
+  window.__hcInjected = true;
 
   // Intercept window.open calls
   var originalOpen = window.open;
@@ -62,14 +62,22 @@ const UH_INJECTION_SCRIPT = `
 true;
 `;
 
+function isHiringCafeHost(host) {
+  return (
+    host === 'hiringcafe.com' ||
+    host.endsWith('.hiringcafe.com') ||
+    host === 'hiring.cafe' ||
+    host.endsWith('.hiring.cafe')
+  );
+}
+
 /**
  * Checks whether a URL is an external job / employer application URL.
- * Also checks internal redirect links with destination query parameters.
+ * Internal Hiring Cafe pages stay in Tab 1; external job links route to Tab 2 (LinkedIn).
  */
 function getExternalDestination(url) {
   if (!url || typeof url !== 'string') return null;
 
-  // Skip non-http protocols (about:blank, data:, mailto:, etc.)
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     return null;
   }
@@ -78,31 +86,29 @@ function getExternalDestination(url) {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
 
-    // If host is unfortunatelyhired.com, check if it's an outbound redirect
-    if (host === 'unfortunatelyhired.com' || host.endsWith('.unfortunatelyhired.com')) {
+    if (isHiringCafeHost(host)) {
       const redirectParams = ['url', 'target', 'dest', 'redirect', 'to', 'link', 'out', 'apply_url', 'job_url'];
       for (const param of redirectParams) {
         const val = parsed.searchParams.get(param);
         if (val && (val.startsWith('http://') || val.startsWith('https://'))) {
           const destParsed = new URL(val);
           const destHost = destParsed.hostname.toLowerCase();
-          if (destHost !== 'unfortunatelyhired.com' && !destHost.endsWith('.unfortunatelyhired.com')) {
+          if (!isHiringCafeHost(destHost)) {
             return val;
           }
         }
       }
-      // Pure internal URL on Unfortunately Hired
       return null;
     }
 
-    // Any other domain is external (job board, employer site, LinkedIn, etc.)
+    // Allow common auth/challenge/CDN hosts inside Tab 1 if needed, route job/employer sites to Tab 2
     return url;
   } catch (_e) {
     return null;
   }
 }
 
-export default function UnfortunatelyHiredBrowser() {
+export default function HiringCafeBrowser() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
   const { navigateToJobUrl } = useSelection();
@@ -132,16 +138,21 @@ export default function UnfortunatelyHiredBrowser() {
   const handleShouldStartLoadWithRequest = useCallback(
     (request) => {
       const { url, isTopFrame } = request;
-      if (!url || url === 'about:blank' || url.startsWith('javascript:') || url.startsWith('data:') || url.startsWith('blob:')) {
+      if (
+        !url ||
+        url === 'about:blank' ||
+        url.startsWith('javascript:') ||
+        url.startsWith('data:') ||
+        url.startsWith('blob:')
+      ) {
         return true;
       }
 
-      // Only intercept top-frame navigations; allow iframes/embeds/trackers to load normally
+      // Only intercept top-frame navigations; allow iframes/embeds/scripts to load normally
       if (isTopFrame === false) {
         return true;
       }
 
-      // Handle Android intent:// or custom app schemes safely
       if (url.startsWith('intent://')) {
         try {
           const match = url.match(/S\.browser_fallback_url=([^;]+)/);
@@ -163,12 +174,10 @@ export default function UnfortunatelyHiredBrowser() {
 
       const externalUrl = getExternalDestination(url);
       if (externalUrl) {
-        // Intercept external job/application link and route to LinkedIn browser tab
         navigateToJobUrl(externalUrl);
         return false;
       }
 
-      // Allow internal navigation on Unfortunately Hired
       return true;
     },
     [navigateToJobUrl]
@@ -201,7 +210,7 @@ export default function UnfortunatelyHiredBrowser() {
     setHasError(false);
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(`
-        window.location.href = '${UNFORTUNATELY_HIRED_URL}';
+        window.location.href = '${HIRING_CAFE_URL}';
         true;
       `);
     }
@@ -224,7 +233,6 @@ export default function UnfortunatelyHiredBrowser() {
     const { nativeEvent } = syntheticEvent;
     const desc = nativeEvent?.description || '';
     const code = nativeEvent?.code;
-    // Ignore aborted navigations or unknown URL schemes from redirects
     if (
       code === -3 ||
       code === -999 ||
@@ -234,7 +242,7 @@ export default function UnfortunatelyHiredBrowser() {
       return;
     }
     setHasError(true);
-    setErrorMessage(desc || 'Could not load Unfortunately Hired.');
+    setErrorMessage(desc || 'Could not load Hiring Cafe.');
   }, []);
 
   return (
@@ -243,10 +251,10 @@ export default function UnfortunatelyHiredBrowser() {
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) }]}>
         <View style={styles.brandRow}>
           <View style={styles.logoBadge}>
-            <Ionicons name="briefcase" size={15} color="#ffffff" />
+            <Ionicons name="cafe" size={15} color="#ffffff" />
           </View>
           <Text style={styles.brandTitle} numberOfLines={1}>
-            Unfortunately Hired
+            Hiring Cafe
           </Text>
         </View>
 
@@ -299,7 +307,7 @@ export default function UnfortunatelyHiredBrowser() {
         ) : (
           <WebView
             ref={webViewRef}
-            source={{ uri: UNFORTUNATELY_HIRED_URL }}
+            source={{ uri: HIRING_CAFE_URL }}
             style={styles.webView}
             userAgent={CUSTOM_USER_AGENT}
             javaScriptEnabled={true}
@@ -308,14 +316,15 @@ export default function UnfortunatelyHiredBrowser() {
             thirdPartyCookiesEnabled={true}
             allowsInlineMediaPlayback={true}
             setSupportMultipleWindows={false}
+            originWhitelist={['*']}
             startInLoadingState={true}
             renderLoading={() => (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator size="small" color="#0a66c2" />
               </View>
             )}
-            injectedJavaScriptBeforeContentLoaded={UH_INJECTION_SCRIPT}
-            injectedJavaScript={UH_INJECTION_SCRIPT}
+            injectedJavaScriptBeforeContentLoaded={HC_INJECTION_SCRIPT}
+            injectedJavaScript={HC_INJECTION_SCRIPT}
             onLoadEnd={() => setLoading(false)}
             onMessage={handleMessage}
             onNavigationStateChange={(nav) => {
@@ -368,7 +377,7 @@ const styles = StyleSheet.create({
     width: 26,
     height: 26,
     borderRadius: 6,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#d97706',
     alignItems: 'center',
     justifyContent: 'center',
   },

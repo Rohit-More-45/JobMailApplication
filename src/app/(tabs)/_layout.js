@@ -24,16 +24,16 @@ export default function TabsLayout() {
         },
       }}
     >
-      {/* 1. Unfortunately Hired (Default Tab) */}
+      {/* 1. Hiring Cafe (Default Tab) */}
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Unfortunately Hired',
-          tabBarLabel: 'Unfort. Hired',
+          title: 'Hiring Cafe',
+          tabBarLabel: 'Hiring Cafe',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
-              name={focused ? 'briefcase' : 'briefcase-outline'}
-              size={20}
+              name={focused ? 'cafe' : 'cafe-outline'}
+              size={19}
               color={color}
             />
           ),
@@ -49,7 +49,7 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'globe' : 'globe-outline'}
-              size={20}
+              size={19}
               color={color}
             />
           ),
@@ -65,14 +65,30 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'sparkles' : 'sparkles-outline'}
-              size={20}
+              size={19}
               color={focused ? '#1a73e8' : color}
             />
           ),
         }}
       />
 
-      {/* 4. Form Autofill */}
+      {/* 4. LinkedIn Job Bot */}
+      <Tabs.Screen
+        name="jobbot"
+        options={{
+          title: 'Job Bot',
+          tabBarLabel: 'Job Bot',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? 'pulse' : 'pulse-outline'}
+              size={19}
+              color={color}
+            />
+          ),
+        }}
+      />
+
+      {/* 5. Form Autofill */}
       <Tabs.Screen
         name="pending2"
         options={{
@@ -81,18 +97,10 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'document-text' : 'document-text-outline'}
-              size={20}
+              size={19}
               color={color}
             />
           ),
-        }}
-      />
-
-      {/* Hidden pending3 */}
-      <Tabs.Screen
-        name="pending3"
-        options={{
-          href: null,
         }}
       />
     </Tabs>
