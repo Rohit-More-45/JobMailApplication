@@ -56,17 +56,17 @@ export default function TabsLayout() {
         }}
       />
 
-      {/* 3. ChatGPT */}
+      {/* 3. Gemini AI */}
       <Tabs.Screen
-        name="chatgpt"
+        name="gemini"
         options={{
-          title: 'ChatGPT',
-          tabBarLabel: 'ChatGPT',
+          title: 'Gemini AI',
+          tabBarLabel: 'Gemini AI',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
-              name={focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
+              name={focused ? 'sparkles' : 'sparkles-outline'}
               size={20}
-              color={focused ? '#10a37f' : color}
+              color={focused ? '#1a73e8' : color}
             />
           ),
         }}

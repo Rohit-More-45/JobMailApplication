@@ -131,9 +131,34 @@ export default function UnfortunatelyHiredBrowser() {
   // Handle link interception
   const handleShouldStartLoadWithRequest = useCallback(
     (request) => {
-      const { url } = request;
-      if (!url || url === 'about:blank' || url.startsWith('javascript:')) {
+      const { url, isTopFrame } = request;
+      if (!url || url === 'about:blank' || url.startsWith('javascript:') || url.startsWith('data:') || url.startsWith('blob:')) {
         return true;
+      }
+
+      // Only intercept top-frame navigations; allow iframes/embeds/trackers to load normally
+      if (isTopFrame === false) {
+        return true;
+      }
+
+      // Handle Android intent:// or custom app schemes safely
+      if (url.startsWith('intent://')) {
+        try {
+          const match = url.match(/S\.browser_fallback_url=([^;]+)/);
+          if (match && match[1]) {
+            const fallbackUrl = decodeURIComponent(match[1]);
+            const externalFallback = getExternalDestination(fallbackUrl);
+            if (externalFallback) {
+              navigateToJobUrl(externalFallback);
+              return false;
+            }
+          }
+        } catch (_e) {}
+        return false;
+      }
+
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        return false;
       }
 
       const externalUrl = getExternalDestination(url);
@@ -197,8 +222,19 @@ export default function UnfortunatelyHiredBrowser() {
 
   const handleError = useCallback((syntheticEvent) => {
     const { nativeEvent } = syntheticEvent;
+    const desc = nativeEvent?.description || '';
+    const code = nativeEvent?.code;
+    // Ignore aborted navigations or unknown URL schemes from redirects
+    if (
+      code === -3 ||
+      code === -999 ||
+      desc.includes('ERR_ABORTED') ||
+      desc.includes('ERR_UNKNOWN_URL_SCHEME')
+    ) {
+      return;
+    }
     setHasError(true);
-    setErrorMessage(nativeEvent.description || 'Could not load Unfortunately Hired.');
+    setErrorMessage(desc || 'Could not load Unfortunately Hired.');
   }, []);
 
   return (

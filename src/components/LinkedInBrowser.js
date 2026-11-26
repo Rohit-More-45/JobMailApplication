@@ -40,7 +40,9 @@ export default function LinkedInBrowser() {
     clearExternalJobUrl,
   } = useSelection();
 
-  const [currentUrl, setCurrentUrl] = useState(LINKEDIN_FEED_URL);
+  const [initialUrl] = useState(() => externalJobUrl || LINKEDIN_FEED_URL);
+  const currentNavUrlRef = useRef(initialUrl);
+  const isInitialMountRef = useRef(true);
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -51,10 +53,20 @@ export default function LinkedInBrowser() {
 
   // Navigate when an external job URL is routed from Unfortunately Hired
   useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      if (externalJobUrl) {
+        // Already consumed via initialUrl on first mount; just clear pending state
+        clearExternalJobUrl();
+      }
+      return;
+    }
+
     if (externalJobUrl) {
       const targetUrl = externalJobUrl;
       clearExternalJobUrl();
-      setCurrentUrl(targetUrl);
+      setHasError(false);
+      currentNavUrlRef.current = targetUrl;
       if (webViewRef.current) {
         try {
           webViewRef.current.injectJavaScript(`
@@ -153,12 +165,50 @@ export default function LinkedInBrowser() {
   const handleNavigationStateChange = useCallback((navState) => {
     setCanGoBack(navState.canGoBack);
     setLoading(navState.loading);
+    if (navState.url) {
+      currentNavUrlRef.current = navState.url;
+    }
 
     if (!navState.loading && webViewRef.current) {
       try {
         webViewRef.current.injectJavaScript(LINKEDIN_INJECTION_SCRIPT);
       } catch (_e) {}
     }
+  }, []);
+
+  const handleShouldStartLoadWithRequest = useCallback((request) => {
+    const { url } = request;
+    if (
+      !url ||
+      url === 'about:blank' ||
+      url.startsWith('http://') ||
+      url.startsWith('https://') ||
+      url.startsWith('javascript:') ||
+      url.startsWith('data:') ||
+      url.startsWith('blob:')
+    ) {
+      return true;
+    }
+
+    // Extract browser fallback URL from Android intent:// deep links (e.g. linkedin://)
+    if (url.startsWith('intent://')) {
+      try {
+        const match = url.match(/S\.browser_fallback_url=([^;]+)/);
+        if (match && match[1] && webViewRef.current) {
+          const fallbackUrl = decodeURIComponent(match[1]);
+          if (fallbackUrl.startsWith('http://') || fallbackUrl.startsWith('https://')) {
+            webViewRef.current.injectJavaScript(`
+              window.location.href = ${JSON.stringify(fallbackUrl)};
+              true;
+            `);
+          }
+        }
+      } catch (_e) {}
+      return false;
+    }
+
+    // Block custom app schemes (linkedin://, market://, etc.) so Android WebView doesn't throw ERR_UNKNOWN_URL_SCHEME
+    return false;
   }, []);
 
   const handleLoadEnd = useCallback(() => {
@@ -185,7 +235,7 @@ export default function LinkedInBrowser() {
 
   const handleGoFeed = useCallback(() => {
     setHasError(false);
-    setCurrentUrl(LINKEDIN_FEED_URL);
+    currentNavUrlRef.current = LINKEDIN_FEED_URL;
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(`
         window.location.href = '${LINKEDIN_FEED_URL}';
@@ -196,8 +246,19 @@ export default function LinkedInBrowser() {
 
   const handleError = useCallback((syntheticEvent) => {
     const { nativeEvent } = syntheticEvent;
+    const desc = nativeEvent?.description || '';
+    const code = nativeEvent?.code;
+    // Ignore aborted navigations (redirects/tab switches) and unknown custom schemes
+    if (
+      code === -3 ||
+      code === -999 ||
+      desc.includes('ERR_ABORTED') ||
+      desc.includes('ERR_UNKNOWN_URL_SCHEME')
+    ) {
+      return;
+    }
     setHasError(true);
-    setErrorMessage(nativeEvent.description || 'Could not load LinkedIn.');
+    setErrorMessage(desc || 'Could not load LinkedIn.');
   }, []);
 
   return (
@@ -228,7 +289,7 @@ export default function LinkedInBrowser() {
           >
             <WebView
               ref={webViewRef}
-              source={{ uri: currentUrl }}
+              source={{ uri: initialUrl }}
               style={styles.webView}
               userAgent={CUSTOM_USER_AGENT}
               javaScriptEnabled={true}
@@ -248,11 +309,15 @@ export default function LinkedInBrowser() {
               injectedJavaScript={LINKEDIN_INJECTION_SCRIPT}
               onLoadEnd={handleLoadEnd}
               onMessage={handleMessage}
+              onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
               onNavigationStateChange={handleNavigationStateChange}
               onError={handleError}
               onHttpError={(syntheticEvent) => {
                 const { nativeEvent } = syntheticEvent;
-                if (nativeEvent.statusCode >= 500) {
+                if (
+                  nativeEvent.statusCode >= 500 &&
+                  (!nativeEvent.url || nativeEvent.url === currentNavUrlRef.current)
+                ) {
                   setHasError(true);
                   setErrorMessage(`HTTP Server Error ${nativeEvent.statusCode}`);
                 }

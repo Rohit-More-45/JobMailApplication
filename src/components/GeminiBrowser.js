@@ -18,11 +18,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useSelection } from '../context/SelectionContext';
-import { CHATGPT_INJECTION_SCRIPT } from '../scripts/chatgptInjection';
+import { GEMINI_INJECTION_SCRIPT } from '../scripts/geminiInjection';
 
-const CHATGPT_URL = 'https://chatgpt.com';
+const GEMINI_URL = 'https://gemini.google.com/app';
 
-const CHATGPT_USER_AGENT = Platform.select({
+const GEMINI_USER_AGENT = Platform.select({
   android:
     'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
   ios:
@@ -63,9 +63,7 @@ function cleanPastedText(text) {
   // 3. Remove escaped quotes: \" -> " and \' -> '
   cleaned = cleaned.replace(/\\(["'])/g, '$1');
 
-  // 4. Remove unwanted markdown / punctuation escape backslashes:
-  // ChatGPT or markdown copiers often insert \ before punctuation:
-  // e.g. \: -> :, \[ -> [, \] -> ], \( -> (, \) -> ), \_ -> _, \* -> *, \- -> -, \. -> ., \! -> !
+  // 4. Remove unwanted markdown / punctuation escape backslashes
   cleaned = cleaned.replace(/\\([:\[\]\(\)\*\_~`#>+=\-|{}.!@])/g, '$1');
 
   // 5. Remove standalone dangling backslashes at the end of lines or before spaces
@@ -132,7 +130,7 @@ function parseEmailDetails(text) {
   };
 }
 
-export default function ChatGPTBrowser() {
+export default function GeminiBrowser() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
   const { screenshots } = useSelection();
@@ -175,7 +173,7 @@ export default function ChatGPTBrowser() {
         Alert.alert('Clipboard Empty', 'Your clipboard is currently empty.');
       }
     } catch (err) {
-      console.warn('[ChatGPTBrowser] Clipboard error:', err);
+      console.warn('[GeminiBrowser] Clipboard error:', err);
     }
   }, []);
 
@@ -185,7 +183,7 @@ export default function ChatGPTBrowser() {
     if (!trimmed) {
       Alert.alert(
         'Empty Input',
-        'Please paste the ChatGPT response before submitting.',
+        'Please paste the Gemini AI response before submitting.',
         [{ text: 'OK' }]
       );
       return;
@@ -232,7 +230,7 @@ export default function ChatGPTBrowser() {
       setModalVisible(false);
       setPastedText('');
     } catch (err) {
-      console.warn('[ChatGPTBrowser] Error opening email intent:', err);
+      console.warn('[GeminiBrowser] Error opening email intent:', err);
       Alert.alert(
         'Could Not Open Email App',
         'Unable to open an email application automatically. Please ensure an email app like Gmail is installed.',
@@ -261,12 +259,12 @@ export default function ChatGPTBrowser() {
     }
   }, []);
 
-  // Handle Paste Screenshots directly into existing ChatGPT WebView
+  // Handle Paste Screenshots directly into existing Gemini WebView
   const handlePasteScreenshots = useCallback(async () => {
     if (!screenshots || screenshots.length === 0) {
       Alert.alert(
         'No Screenshots Available',
-        'No screenshots have been captured yet. Open the LinkedIn or Jobs tab and tap the camera icon to capture up to 3 screenshots.',
+        'No screenshots have been captured yet. Open the LinkedIn tab and tap the camera icon to capture up to 3 screenshots.',
         [{ text: 'OK' }]
       );
       return;
@@ -298,17 +296,17 @@ export default function ChatGPTBrowser() {
           await Clipboard.setImageAsync(rawBase64);
         }
       } catch (_clipErr) {
-        console.warn('[ChatGPTBrowser] Clipboard copy error:', _clipErr);
+        console.warn('[GeminiBrowser] Clipboard copy error:', _clipErr);
       }
 
-      // 3. Attach directly into ChatGPT web composer inside the existing WebView
+      // 3. Attach directly into Gemini web composer inside the existing WebView
       if (webViewRef.current) {
         const escaped = JSON.stringify(base64List);
         webViewRef.current.injectJavaScript(`
           if (typeof window.__JOBMAIL_ATTACH_SCREENSHOTS === 'function') {
             window.__JOBMAIL_ATTACH_SCREENSHOTS(${escaped});
           } else {
-            ${CHATGPT_INJECTION_SCRIPT}
+            ${GEMINI_INJECTION_SCRIPT}
             if (typeof window.__JOBMAIL_ATTACH_SCREENSHOTS === 'function') {
               window.__JOBMAIL_ATTACH_SCREENSHOTS(${escaped});
             }
@@ -317,7 +315,7 @@ export default function ChatGPTBrowser() {
         `);
       }
     } catch (err) {
-      console.warn('[ChatGPTBrowser] handlePasteScreenshots error:', err);
+      console.warn('[GeminiBrowser] handlePasteScreenshots error:', err);
     }
   }, [screenshots, getBase64FromScreenshot]);
 
@@ -326,12 +324,12 @@ export default function ChatGPTBrowser() {
       const data = JSON.parse(event.nativeEvent.data);
       if (!data) return;
 
-      if (data.type === 'CHATGPT_ATTACH_SUCCESS') {
+      if (data.type === 'GEMINI_ATTACH_SUCCESS') {
         // Silently succeeded - images attached directly into composer
-      } else if (data.type === 'CHATGPT_ATTACH_RETRY_EXHAUSTED') {
+      } else if (data.type === 'GEMINI_ATTACH_RETRY_EXHAUSTED') {
         Alert.alert(
           'Screenshots on Clipboard',
-          'Screenshot is copied to your clipboard. Tap the ChatGPT input box and select Paste.',
+          'Screenshot is copied to your clipboard. Tap the Gemini input box and select Paste.',
           [{ text: 'OK' }]
         );
       }
@@ -342,9 +340,26 @@ export default function ChatGPTBrowser() {
     setLoading(false);
     if (webViewRef.current) {
       try {
-        webViewRef.current.injectJavaScript(CHATGPT_INJECTION_SCRIPT);
+        webViewRef.current.injectJavaScript(GEMINI_INJECTION_SCRIPT);
       } catch (_e) {}
     }
+  }, []);
+
+  const handleShouldStartLoadWithRequest = useCallback((request) => {
+    const { url } = request;
+    if (
+      !url ||
+      url === 'about:blank' ||
+      url.startsWith('http://') ||
+      url.startsWith('https://') ||
+      url.startsWith('javascript:') ||
+      url.startsWith('data:') ||
+      url.startsWith('blob:')
+    ) {
+      return true;
+    }
+    // Block external app deep links (intent://, etc.) so Gemini stays inside WebView
+    return false;
   }, []);
 
   return (
@@ -353,9 +368,9 @@ export default function ChatGPTBrowser() {
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) }]}>
         <View style={styles.brandRow}>
           <View style={styles.logoBadge}>
-            <Ionicons name="chatbubble-ellipses" size={16} color="#ffffff" />
+            <Ionicons name="sparkles" size={16} color="#ffffff" />
           </View>
-          <Text style={styles.brandTitle}>ChatGPT</Text>
+          <Text style={styles.brandTitle}>Gemini AI</Text>
         </View>
 
         <View style={styles.actionsRow}>
@@ -374,7 +389,7 @@ export default function ChatGPTBrowser() {
             style={styles.iconButton}
             onPress={() => webViewRef.current?.reload()}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityLabel="Reload ChatGPT"
+            accessibilityLabel="Reload Gemini AI"
           >
             <Ionicons name={loading ? 'sync' : 'reload'} size={18} color="#334155" />
           </TouchableOpacity>
@@ -425,13 +440,13 @@ export default function ChatGPTBrowser() {
         </TouchableOpacity>
       </View>
 
-      {/* Main ChatGPT WebView */}
+      {/* Main Gemini AI WebView */}
       <View style={styles.webViewContainer}>
         <WebView
           ref={webViewRef}
-          source={{ uri: CHATGPT_URL }}
+          source={{ uri: GEMINI_URL }}
           style={styles.webView}
-          userAgent={CHATGPT_USER_AGENT}
+          userAgent={GEMINI_USER_AGENT}
           javaScriptEnabled={true}
           domStorageEnabled={true}
           sharedCookiesEnabled={true}
@@ -439,14 +454,18 @@ export default function ChatGPTBrowser() {
           startInLoadingState={true}
           renderLoading={() => (
             <View style={styles.loadingOverlay}>
-              <ActivityIndicator size="large" color="#10a37f" />
-              <Text style={styles.loadingText}>Loading ChatGPT...</Text>
+              <ActivityIndicator size="large" color="#1a73e8" />
+              <Text style={styles.loadingText}>Loading Gemini AI...</Text>
             </View>
           )}
-          injectedJavaScript={CHATGPT_INJECTION_SCRIPT}
+          injectedJavaScript={GEMINI_INJECTION_SCRIPT}
           onLoadEnd={handleLoadEnd}
           onMessage={handleMessage}
-          onNavigationStateChange={(nav) => setCanGoBack(nav.canGoBack)}
+          onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
+          onNavigationStateChange={(nav) => {
+            setCanGoBack(nav.canGoBack);
+            setLoading(nav.loading);
+          }}
         />
       </View>
 
@@ -581,7 +600,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 7,
-    backgroundColor: '#10a37f',
+    backgroundColor: '#1a73e8',
     alignItems: 'center',
     justifyContent: 'center',
   },

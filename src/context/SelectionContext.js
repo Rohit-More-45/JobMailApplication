@@ -57,7 +57,7 @@ export function SelectionProvider({ children }) {
     if (!url) return;
     setExternalJobUrl(url);
     try {
-      router.navigate('/(tabs)/linkedin');
+      router.navigate('/linkedin');
     } catch (err) {
       console.warn('[SelectionContext] router.navigate error:', err);
     }
