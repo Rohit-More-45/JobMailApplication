@@ -11,12 +11,14 @@ import {
   FOREGROUND_CHECK_INTERVAL_MS,
   addJobToAppliedList,
   addJobToManualList,
+  addJobToQuarantineList,
   buildLinkedInBrowserSearchUrl,
   loadBotConfig,
   loadBotStatus,
   processFetchedJobs,
   recordBotCheckError,
   runJobCheckNow,
+  saveUnknownQuestionsToAutofill,
   sendBotNotification,
   setupJobNotifications,
   syncBackgroundBotRegistration,
@@ -197,8 +199,23 @@ function JobMonitorCoordinator() {
             `${job.company}${job.location ? ' • ' + job.location : ''}`,
             { url: job.url, jobId: job.id }
           );
+        } else if (data.status === 'QUARANTINE') {
+          const unknown = Array.isArray(data.unknownQuestions) ? data.unknownQuestions : [];
+          const addedCount = await saveUnknownQuestionsToAutofill(unknown);
+          await addJobToQuarantineList(
+            job,
+            unknown,
+            data.reason || 'Unanswered question(s) — apply manually'
+          );
+          if (addedCount > 0) {
+            await sendBotNotification(
+              `Quarantined: ${job.title}`,
+              `${addedCount} new question(s) saved to Autofill tab`,
+              { url: job.url, jobId: job.id }
+            );
+          }
         } else {
-          await addJobToManualList(job, data.reason || 'Manual apply needed');
+          await addJobToManualList(job, data.reason || 'External Apply (Manual)');
         }
         notifyBotDataUpdated();
       }

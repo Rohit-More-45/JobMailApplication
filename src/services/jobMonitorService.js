@@ -11,7 +11,9 @@ const CONFIG_KEY = '@JobMail:job_bot_config_v3';
 const SEEN_IDS_KEY = '@JobMail:job_bot_seen_ids';
 const FOUND_JOBS_KEY = '@JobMail:job_bot_found_jobs';
 const APPLIED_JOBS_KEY = '@JobMail:job_bot_applied_jobs';
+const QUARANTINE_JOBS_KEY = '@JobMail:job_bot_quarantine_jobs';
 const MANUAL_JOBS_KEY = '@JobMail:job_bot_manual_jobs';
+const SAVED_FIELDS_KEY = '@JobMail:saved_form_fields';
 const STATUS_KEY = '@JobMail:job_bot_status';
 const CHANNEL_ID = 'jobmail-linkedin-alerts';
 
@@ -143,9 +145,24 @@ export async function loadManualJobs() {
   return [];
 }
 
+export async function loadQuarantineJobs() {
+  try {
+    const raw = await AsyncStorage.getItem(QUARANTINE_JOBS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (_e) {}
+  return [];
+}
+
 export async function addJobToAppliedList(job, note = 'Easy Apply submitted by Bot') {
   if (!job || !job.id) return;
-  const [applied, manual] = await Promise.all([loadAppliedJobs(), loadManualJobs()]);
+  const [applied, manual, quarantine] = await Promise.all([
+    loadAppliedJobs(),
+    loadManualJobs(),
+    loadQuarantineJobs(),
+  ]);
   const entry = {
     ...job,
     appliedAt: Date.now(),
@@ -153,16 +170,44 @@ export async function addJobToAppliedList(job, note = 'Easy Apply submitted by B
   };
   const updatedApplied = [entry, ...applied.filter((j) => j.id !== job.id)].slice(0, 100);
   const updatedManual = manual.filter((j) => j.id !== job.id);
+  const updatedQuarantine = quarantine.filter((j) => j.id !== job.id);
   await Promise.all([
     AsyncStorage.setItem(APPLIED_JOBS_KEY, JSON.stringify(updatedApplied)),
+    AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify(updatedManual)),
+    AsyncStorage.setItem(QUARANTINE_JOBS_KEY, JSON.stringify(updatedQuarantine)),
+  ]);
+}
+
+export async function addJobToQuarantineList(job, unknownQuestions = [], note = 'Unanswered questions saved to Autofill') {
+  if (!job || !job.id) return;
+  const [applied, quarantine, manual] = await Promise.all([
+    loadAppliedJobs(),
+    loadQuarantineJobs(),
+    loadManualJobs(),
+  ]);
+  if (applied.some((j) => j.id === job.id)) return;
+  const entry = {
+    ...job,
+    quarantinedAt: Date.now(),
+    unknownQuestions: Array.isArray(unknownQuestions) ? unknownQuestions : [],
+    statusNote: note,
+  };
+  const updatedQuarantine = [entry, ...quarantine.filter((j) => j.id !== job.id)].slice(0, 100);
+  const updatedManual = manual.filter((j) => j.id !== job.id);
+  await Promise.all([
+    AsyncStorage.setItem(QUARANTINE_JOBS_KEY, JSON.stringify(updatedQuarantine)),
     AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify(updatedManual)),
   ]);
 }
 
 export async function addJobToManualList(job, note = 'External Apply (Manual)') {
   if (!job || !job.id) return;
-  const [applied, manual] = await Promise.all([loadAppliedJobs(), loadManualJobs()]);
-  if (applied.some((j) => j.id === job.id)) return;
+  const [applied, quarantine, manual] = await Promise.all([
+    loadAppliedJobs(),
+    loadQuarantineJobs(),
+    loadManualJobs(),
+  ]);
+  if (applied.some((j) => j.id === job.id) || quarantine.some((j) => j.id === job.id)) return;
   const entry = {
     ...job,
     addedAt: Date.now(),
@@ -176,8 +221,65 @@ export async function clearAppliedJobsList() {
   await AsyncStorage.setItem(APPLIED_JOBS_KEY, JSON.stringify([]));
 }
 
+export async function clearQuarantineJobsList() {
+  await AsyncStorage.setItem(QUARANTINE_JOBS_KEY, JSON.stringify([]));
+}
+
 export async function clearManualJobsList() {
   await AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify([]));
+}
+
+function normalizeQuestionKey(str) {
+  return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Appends new unanswered Easy Apply questions into @JobMail:saved_form_fields
+ * so the user can fill in answers in the Autofill tab for future applications.
+ */
+export async function saveUnknownQuestionsToAutofill(unknownQuestions = []) {
+  if (!Array.isArray(unknownQuestions) || unknownQuestions.length === 0) return 0;
+
+  try {
+    const raw = await AsyncStorage.getItem(SAVED_FIELDS_KEY);
+    let existing = [];
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) existing = parsed;
+      } catch (_e) {}
+    }
+
+    const existingKeys = new Set(existing.map((f) => normalizeQuestionKey(f.name)));
+    const newItems = [];
+
+    for (const q of unknownQuestions) {
+      const qName = (q && q.name ? q.name : '').trim();
+      if (!qName || qName.length < 3) continue;
+      const key = normalizeQuestionKey(qName);
+      if (!key || existingKeys.has(key)) continue;
+
+      existingKeys.add(key);
+      newItems.push({
+        id: 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        name: qName,
+        value: '',
+        needsAnswer: true,
+        fieldType: q.fieldType || 'text',
+        options: Array.isArray(q.options) ? q.options : [],
+      });
+    }
+
+    if (newItems.length > 0) {
+      const updated = [...newItems, ...existing];
+      await AsyncStorage.setItem(SAVED_FIELDS_KEY, JSON.stringify(updated));
+    }
+
+    return newItems.length;
+  } catch (err) {
+    console.warn('[JobMonitor] saveUnknownQuestionsToAutofill error:', err);
+    return 0;
+  }
 }
 
 export async function loadBotStatus() {

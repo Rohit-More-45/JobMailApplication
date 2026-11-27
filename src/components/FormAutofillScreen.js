@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { buildAutofillScript } from '../scripts/formAutofillInjection';
 
@@ -98,36 +99,48 @@ export default function FormAutofillScreen() {
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
 
-  // Load saved values from AsyncStorage on mount
-  useEffect(() => {
-    async function loadFields() {
-      try {
-        const seeded = await AsyncStorage.getItem(SEED_KEY);
-        const json = await AsyncStorage.getItem(STORAGE_KEY);
-        let parsed = null;
-        if (json) {
-          try {
-            parsed = JSON.parse(json);
-          } catch (_e) {}
-        }
-
-        if (!seeded || !Array.isArray(parsed) || parsed.length === 0) {
-          // Initialize with default ready answers
-          setSavedFields(DEFAULT_READY_ANSWERS);
-          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_READY_ANSWERS));
-          await AsyncStorage.setItem(SEED_KEY, 'v3');
-        } else {
-          setSavedFields(parsed);
-        }
-      } catch (err) {
-        console.warn('[FormAutofillScreen] Load storage error:', err);
-        setSavedFields(DEFAULT_READY_ANSWERS);
-      } finally {
-        setLoadingStorage(false);
+  const loadFieldsFromStorage = useCallback(async () => {
+    try {
+      const seeded = await AsyncStorage.getItem(SEED_KEY);
+      const json = await AsyncStorage.getItem(STORAGE_KEY);
+      let parsed = null;
+      if (json) {
+        try {
+          parsed = JSON.parse(json);
+        } catch (_e) {}
       }
+
+      if (!seeded || !Array.isArray(parsed) || parsed.length === 0) {
+        setSavedFields(DEFAULT_READY_ANSWERS);
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_READY_ANSWERS));
+        await AsyncStorage.setItem(SEED_KEY, 'v3');
+      } else {
+        // Put unanswered bot questions first so user sees them immediately
+        const sorted = [...parsed].sort((a, b) => {
+          const aEmpty = !a.value || !a.value.toString().trim() || a.needsAnswer ? 0 : 1;
+          const bEmpty = !b.value || !b.value.toString().trim() || b.needsAnswer ? 0 : 1;
+          return aEmpty - bEmpty;
+        });
+        setSavedFields(sorted);
+      }
+    } catch (err) {
+      console.warn('[FormAutofillScreen] Load storage error:', err);
+      setSavedFields(DEFAULT_READY_ANSWERS);
+    } finally {
+      setLoadingStorage(false);
     }
-    loadFields();
   }, []);
+
+  // Load saved values on mount and whenever user switches to Autofill tab
+  useEffect(() => {
+    loadFieldsFromStorage();
+  }, [loadFieldsFromStorage]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadFieldsFromStorage();
+    }, [loadFieldsFromStorage])
+  );
 
   // Save fields to AsyncStorage
   const persistFields = useCallback(async (fields) => {
@@ -196,13 +209,14 @@ export default function FormAutofillScreen() {
     let updated;
     if (editingItem) {
       updated = savedFields.map((f) =>
-        f.id === editingItem.id ? { ...f, name, value } : f
+        f.id === editingItem.id ? { ...f, name, value, needsAnswer: false } : f
       );
     } else {
       const newItem = {
         id: 'field_' + Date.now(),
         name,
         value,
+        needsAnswer: false,
       };
       updated = [...savedFields, newItem];
     }
@@ -427,37 +441,60 @@ export default function FormAutofillScreen() {
               data={savedFields}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContent}
-              renderItem={({ item }) => (
-                <View style={styles.savedItemCard}>
-                  <View style={styles.savedItemInfo}>
-                    <Text style={styles.savedItemName}>{item.name}</Text>
-                    <Text style={styles.savedItemValue} numberOfLines={3}>
-                      {item.value}
-                    </Text>
-                  </View>
+              renderItem={({ item }) => {
+                const isPending = !item.value || !item.value.toString().trim() || item.needsAnswer;
+                return (
+                  <View
+                    style={[
+                      styles.savedItemCard,
+                      isPending && styles.pendingItemCard,
+                    ]}
+                  >
+                    <View style={styles.savedItemInfo}>
+                      <View style={styles.savedItemHeaderRow}>
+                        <Text style={styles.savedItemName}>{item.name}</Text>
+                        {isPending && (
+                          <View style={styles.needsAnswerBadge}>
+                            <Text style={styles.needsAnswerBadgeText}>NEEDS ANSWER</Text>
+                          </View>
+                        )}
+                      </View>
+                      {isPending ? (
+                        <Text style={styles.pendingValueHint}>
+                          {Array.isArray(item.options) && item.options.length > 0
+                            ? `Options: ${item.options.join(' / ')} — Tap pencil to answer`
+                            : 'Tap pencil icon to add your answer for future Easy Apply jobs'}
+                        </Text>
+                      ) : (
+                        <Text style={styles.savedItemValue} numberOfLines={3}>
+                          {item.value}
+                        </Text>
+                      )}
+                    </View>
 
-                  {/* Actions: Edit and Delete buttons */}
-                  <View style={styles.cardActionsRow}>
-                    <TouchableOpacity
-                      style={styles.cardActionBtn}
-                      onPress={() => handleStartEdit(item)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityLabel={`Edit ${item.name}`}
-                    >
-                      <Ionicons name="pencil-outline" size={16} color="#0a66c2" />
-                    </TouchableOpacity>
+                    {/* Actions: Edit and Delete buttons */}
+                    <View style={styles.cardActionsRow}>
+                      <TouchableOpacity
+                        style={styles.cardActionBtn}
+                        onPress={() => handleStartEdit(item)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityLabel={`Edit ${item.name}`}
+                      >
+                        <Ionicons name="pencil-outline" size={16} color="#0a66c2" />
+                      </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.cardActionBtn}
-                      onPress={() => handleDeleteField(item.id)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityLabel={`Delete ${item.name}`}
-                    >
-                      <Ionicons name="trash-outline" size={16} color="#ef4444" />
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.cardActionBtn}
+                        onPress={() => handleDeleteField(item.id)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityLabel={`Delete ${item.name}`}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              )}
+                );
+              }}
             />
           )}
         </View>
@@ -642,6 +679,33 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     paddingHorizontal: 10,
     paddingVertical: 8,
+  },
+  pendingItemCard: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fcd34d',
+  },
+  savedItemHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 2,
+  },
+  needsAnswerBadge: {
+    backgroundColor: '#f59e0b',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  needsAnswerBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  pendingValueHint: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    color: '#b45309',
   },
   savedItemInfo: {
     flex: 1,
