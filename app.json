@@ -41,8 +41,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "f9d0eca4-318e-4087-b026-b59497aa0f50"
+        "projectId": "ee1e6603-8077-4e2b-a489-199b8cd364cf"
       }
-    }
+    },
+    "owner": "rohitmore6035"
   }
 }
