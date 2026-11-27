@@ -224,7 +224,7 @@ export function buildEasyApplyScript(savedFields = []) {
   }
 
   function processModalQuestions() {
-    var modal = document.querySelector('.jobs-easy-apply-modal, [role="dialog"]');
+    var modal = findEasyApplyModal();
     if (!modal) return [];
 
     var unknownQuestions = [];
@@ -382,22 +382,13 @@ export function buildEasyApplyScript(savedFields = []) {
     return unknownQuestions;
   }
 
-  function hasConfirmationMessage() {
-    var bodyText = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase();
-    return (
-      bodyText.indexOf('application sent') !== -1 ||
-      bodyText.indexOf('your application was sent') !== -1 ||
-      bodyText.indexOf('already applied') !== -1 ||
-      bodyText.indexOf('applied on ') !== -1
-    );
-  }
-
   function findButtonByText(container, patterns) {
     var root = container || document;
-    var btns = root.querySelectorAll('button');
+    var btns = root.querySelectorAll('button, a.jobs-apply-button, a[href*="/jobs/apply"]');
     for (var i = 0; i < btns.length; i++) {
       var b = btns[i];
       if (b.disabled) continue;
+      if (b.offsetWidth === 0 && b.offsetHeight === 0) continue;
       var txt = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
       for (var p = 0; p < patterns.length; p++) {
         if (txt.indexOf(patterns[p]) !== -1) {
@@ -406,6 +397,43 @@ export function buildEasyApplyScript(savedFields = []) {
       }
     }
     return null;
+  }
+
+  function findEasyApplyModal() {
+    var explicit = document.querySelector(
+      '.jobs-easy-apply-modal, [data-test-modal-id="easy-apply-modal"], .jobs-easy-apply-content'
+    );
+    if (explicit) return explicit;
+
+    // Only treat [role="dialog"] as Easy Apply modal if it actually has a form or Next/Review/Submit button
+    var dialogs = document.querySelectorAll('[role="dialog"]');
+    for (var i = 0; i < dialogs.length; i++) {
+      var d = dialogs[i];
+      if (
+        d.querySelector('form') ||
+        findButtonByText(d, ['submit application', 'next', 'review', 'continue to next step'])
+      ) {
+        return d;
+      }
+    }
+
+    // Mobile LinkedIn full-page Easy Apply route
+    if (window.location.href.indexOf('/jobs/apply') !== -1) {
+      return document.querySelector('main form') || document.querySelector('main') || document.body;
+    }
+    return null;
+  }
+
+  function hasConfirmationMessage() {
+    var bodyText = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase();
+    return (
+      bodyText.indexOf('application sent') !== -1 ||
+      bodyText.indexOf('your application was sent') !== -1 ||
+      bodyText.indexOf('application submitted') !== -1 ||
+      bodyText.indexOf('your application has been submitted') !== -1 ||
+      bodyText.indexOf('already applied') !== -1 ||
+      bodyText.indexOf('applied on ') !== -1
+    );
   }
 
   function tick() {
@@ -426,7 +454,7 @@ export function buildEasyApplyScript(savedFields = []) {
       return;
     }
 
-    var modal = document.querySelector('.jobs-easy-apply-modal, [role="dialog"]');
+    var modal = findEasyApplyModal();
     if (modal) {
       var unknownQuestions = processModalQuestions();
       if (unknownQuestions.length > 0) {
@@ -466,11 +494,16 @@ export function buildEasyApplyScript(savedFields = []) {
       return;
     }
 
-    var easyApplyBtn = findButtonByText(document, ['easy apply']);
-    if (easyApplyBtn) {
-      easyApplyBtn.click();
-      setTimeout(tick, 1800);
-      return;
+    var easyApplyBtn =
+      document.querySelector('button.jobs-apply-button, a.jobs-apply-button') ||
+      findButtonByText(document, ['easy apply']);
+    if (easyApplyBtn && !easyApplyBtn.disabled) {
+      var btnTxt = (easyApplyBtn.innerText || easyApplyBtn.getAttribute('aria-label') || '').toLowerCase();
+      if (btnTxt.indexOf('easy apply') !== -1) {
+        easyApplyBtn.click();
+        setTimeout(tick, 1800);
+        return;
+      }
     }
 
     var externalApplyBtn = findButtonByText(document, ['apply now', 'apply on company', 'apply']);

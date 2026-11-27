@@ -284,6 +284,23 @@ export default function JobBotScreen() {
     [enqueueEasyApplyJobs]
   );
 
+  const appliedIdsSet = new Set(appliedJobs.map((j) => j.id));
+  const pendingEasyApplyJobs = foundJobs.filter(
+    (j) => j.isEasyApply && !appliedIdsSet.has(j.id)
+  );
+
+  const handleRunEasyApplyNow = useCallback(() => {
+    if (pendingEasyApplyJobs.length === 0) {
+      Alert.alert('No Easy Apply Jobs', 'Scan for Easy Apply jobs first.');
+      return;
+    }
+    enqueueEasyApplyJobs(pendingEasyApplyJobs);
+    Alert.alert(
+      'Easy Apply Started',
+      `Queued ${pendingEasyApplyJobs.length} Easy Apply job(s). Check Job Lists → Applied / Quarantine / Logs for results.`
+    );
+  }, [pendingEasyApplyJobs, enqueueEasyApplyJobs]);
+
   const modalData =
     activeListTab === 'applied'
       ? appliedJobs
@@ -351,6 +368,21 @@ export default function JobBotScreen() {
           <Text style={styles.autoApplyBannerText} numberOfLines={1}>
             Auto-Applying: {activeAutoApplyJob?.title || 'Queued'} ({easyApplyQueue.length} left)
           </Text>
+        </View>
+      )}
+
+      {pendingEasyApplyJobs.length > 0 && !activeAutoApplyJob && easyApplyQueue.length === 0 && (
+        <View style={styles.listsBannerRow}>
+          <TouchableOpacity
+            style={styles.runEasyNowBtn}
+            onPress={handleRunEasyApplyNow}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="flash" size={15} color="#ffffff" />
+            <Text style={styles.runEasyNowBtnText}>
+              Run Easy Apply Now ({pendingEasyApplyJobs.length} jobs)
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -1121,6 +1153,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#1e40af',
+  },
+  runEasyNowBtn: {
+    backgroundColor: '#10a37f',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  runEasyNowBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   scrollBody: {
     flex: 1,
