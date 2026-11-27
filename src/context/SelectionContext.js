@@ -14,6 +14,9 @@ const SelectionContext = createContext({
   externalJobUrl: null,
   navigateToJobUrl: () => {},
   clearExternalJobUrl: () => {},
+  autofillFormUrl: null,
+  navigateToAutofillUrl: () => {},
+  clearAutofillFormUrl: () => {},
   easyApplyQueue: [],
   activeAutoApplyJob: null,
   enqueueEasyApplyJobs: () => {},
@@ -31,6 +34,7 @@ export function SelectionProvider({ children }) {
   const [selectedPostId, setSelectedPostId] = useState(null);
   const [screenshots, setScreenshots] = useState([]);
   const [externalJobUrl, setExternalJobUrl] = useState(null);
+  const [autofillFormUrl, setAutofillFormUrl] = useState(null);
   const [easyApplyQueue, setEasyApplyQueue] = useState([]);
   const [activeAutoApplyJob, setActiveAutoApplyJob] = useState(null);
   const [searchRequest, setSearchRequest] = useState(null);
@@ -80,6 +84,20 @@ export function SelectionProvider({ children }) {
 
   const clearExternalJobUrl = useCallback(() => {
     setExternalJobUrl(null);
+  }, []);
+
+  const navigateToAutofillUrl = useCallback((url) => {
+    if (!url) return;
+    setAutofillFormUrl(url);
+    try {
+      router.navigate('/pending2');
+    } catch (err) {
+      console.warn('[SelectionContext] router.navigate autofill error:', err);
+    }
+  }, []);
+
+  const clearAutofillFormUrl = useCallback(() => {
+    setAutofillFormUrl(null);
   }, []);
 
   const enqueueEasyApplyJobs = useCallback((jobs) => {
@@ -140,6 +158,9 @@ export function SelectionProvider({ children }) {
         externalJobUrl,
         navigateToJobUrl,
         clearExternalJobUrl,
+        autofillFormUrl,
+        navigateToAutofillUrl,
+        clearAutofillFormUrl,
         easyApplyQueue,
         activeAutoApplyJob,
         enqueueEasyApplyJobs,

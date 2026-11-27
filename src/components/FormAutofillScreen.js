@@ -17,6 +17,7 @@ import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSelection } from '../context/SelectionContext';
 import { buildAutofillScript } from '../scripts/formAutofillInjection';
 
 const STORAGE_KEY = '@JobMail:saved_form_fields';
@@ -83,6 +84,7 @@ const CUSTOM_USER_AGENT = Platform.select({
 export default function FormAutofillScreen() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
+  const { autofillFormUrl, clearAutofillFormUrl } = useSelection();
 
   // Saved values list
   const [savedFields, setSavedFields] = useState([]);
@@ -141,6 +143,17 @@ export default function FormAutofillScreen() {
       loadFieldsFromStorage();
     }, [loadFieldsFromStorage])
   );
+
+  // Open incoming Manual Apply job URL from Job Bot inside Autofill WebView
+  useEffect(() => {
+    if (autofillFormUrl) {
+      const target = autofillFormUrl;
+      clearAutofillFormUrl();
+      setUrlInput(target);
+      setCurrentFormUrl(target);
+      setFormLoading(true);
+    }
+  }, [autofillFormUrl, clearAutofillFormUrl]);
 
   // Save fields to AsyncStorage
   const persistFields = useCallback(async (fields) => {

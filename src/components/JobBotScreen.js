@@ -59,6 +59,7 @@ export default function JobBotScreen() {
   const insets = useSafeAreaInsets();
   const {
     navigateToJobUrl,
+    navigateToAutofillUrl,
     enqueueEasyApplyJobs,
     activeAutoApplyJob,
     easyApplyQueue,
@@ -857,7 +858,11 @@ export default function JobBotScreen() {
                         style={styles.modalOpenBtn}
                         onPress={() => {
                           setListsModalVisible(false);
-                          navigateToJobUrl(item.url);
+                          if (activeListTab === 'manual') {
+                            navigateToAutofillUrl(item.url);
+                          } else {
+                            navigateToJobUrl(item.url);
+                          }
                         }}
                       >
                         <Text style={styles.modalOpenBtnText}>
