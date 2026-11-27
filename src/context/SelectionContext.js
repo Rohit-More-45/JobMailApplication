@@ -37,7 +37,8 @@ export function SelectionProvider({ children }) {
   const [autofillFormUrl, setAutofillFormUrl] = useState(null);
   const [easyApplyQueue, setEasyApplyQueue] = useState([]);
   const [activeAutoApplyJob, setActiveAutoApplyJob] = useState(null);
-  const [searchRequest, setSearchRequest] = useState(null);
+  const [searchQueue, setSearchQueue] = useState([]);
+  const [activeSearchRequest, setActiveSearchRequest] = useState(null);
   const [botDataVersion, setBotDataVersion] = useState(0);
   const webViewRef = useRef(null);
 
@@ -122,21 +123,35 @@ export function SelectionProvider({ children }) {
   }, []);
 
   const triggerBotSearch = useCallback(
-    (url, { notify = true, showAlert = false, descriptionKeywords = '' } = {}) => {
-      if (!url) return;
-      setSearchRequest({
-        id: Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        url,
+    (urlOrUrls, { notify = true, showAlert = false, descriptionKeywords = '' } = {}) => {
+      const urls = Array.isArray(urlOrUrls) ? urlOrUrls.filter(Boolean) : [urlOrUrls].filter(Boolean);
+      if (urls.length === 0) return;
+      const items = urls.map((u, idx) => ({
+        id: Date.now() + '_' + idx + '_' + Math.random().toString(36).slice(2, 6),
+        url: u,
         notify,
-        showAlert,
+        showAlert: showAlert && idx === urls.length - 1,
         descriptionKeywords,
-      });
+      }));
+      setSearchQueue((prev) => [...prev, ...items]);
     },
     []
   );
 
+  const popNextBotSearch = useCallback(() => {
+    setSearchQueue((prev) => {
+      if (prev.length === 0) {
+        setActiveSearchRequest(null);
+        return prev;
+      }
+      const [next, ...rest] = prev;
+      setActiveSearchRequest(next);
+      return rest;
+    });
+  }, []);
+
   const clearBotSearch = useCallback(() => {
-    setSearchRequest(null);
+    setActiveSearchRequest(null);
   }, []);
 
   const notifyBotDataUpdated = useCallback(() => {
@@ -166,10 +181,11 @@ export function SelectionProvider({ children }) {
         enqueueEasyApplyJobs,
         setActiveAutoApplyJob,
         popNextAutoApplyJob,
-        searchRequest,
-        isSearchingBot: searchRequest !== null,
+        searchRequest: activeSearchRequest,
+        isSearchingBot: activeSearchRequest !== null || searchQueue.length > 0,
         botDataVersion,
         triggerBotSearch,
+        popNextBotSearch,
         clearBotSearch,
         notifyBotDataUpdated,
       }}

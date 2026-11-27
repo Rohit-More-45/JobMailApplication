@@ -42,6 +42,7 @@ export const DEFAULT_BOT_CONFIG = {
   autoApplyEasyApply: true,
   easyApplyOnly: true, // Uses LinkedIn f_AL=true filter
   keywords: 'Software Engineer',
+  keywords2: '.NET Developer',
   descriptionKeywords: '', // Optional Boolean group condition, e.g. (.net OR dotnet) AND angular
   location: 'India',
   timeFilter: 'r86400',
@@ -377,8 +378,8 @@ export async function loadBotStatus() {
   };
 }
 
-export function buildLinkedInBrowserSearchUrl(config) {
-  if (config.customUrl && config.customUrl.trim().startsWith('http')) {
+export function buildLinkedInBrowserSearchUrl(config, overrideKeywords = null) {
+  if (!overrideKeywords && config.customUrl && config.customUrl.trim().startsWith('http')) {
     try {
       const parsed = new URL(config.customUrl.trim());
       if (config.easyApplyOnly) {
@@ -390,9 +391,10 @@ export function buildLinkedInBrowserSearchUrl(config) {
     }
   }
 
+  const kw = overrideKeywords !== null ? overrideKeywords : config.keywords;
   const params = new URLSearchParams();
-  if (config.keywords && config.keywords.trim()) {
-    params.set('keywords', config.keywords.trim());
+  if (kw && kw.trim()) {
+    params.set('keywords', kw.trim());
   }
   if (config.location && config.location.trim()) {
     params.set('location', config.location.trim());
@@ -411,6 +413,25 @@ export function buildLinkedInBrowserSearchUrl(config) {
   }
   params.set('sortBy', 'DD');
   return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
+}
+
+export function buildAllLinkedInSearchUrls(config) {
+  const urls = [];
+  if (config.customUrl && config.customUrl.trim().startsWith('http')) {
+    urls.push(buildLinkedInBrowserSearchUrl(config));
+    return urls;
+  }
+  if (config.keywords && config.keywords.trim()) {
+    urls.push(buildLinkedInBrowserSearchUrl(config, config.keywords.trim()));
+  }
+  if (
+    config.keywords2 &&
+    config.keywords2.trim() &&
+    config.keywords2.trim().toLowerCase() !== (config.keywords || '').trim().toLowerCase()
+  ) {
+    urls.push(buildLinkedInBrowserSearchUrl(config, config.keywords2.trim()));
+  }
+  return urls;
 }
 
 export function buildLinkedInGuestSearchUrl(config) {

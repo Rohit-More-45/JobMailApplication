@@ -13,7 +13,7 @@ import {
   addJobToManualList,
   addJobToQuarantineList,
   appendBotLog,
-  buildLinkedInBrowserSearchUrl,
+  buildAllLinkedInSearchUrls,
   loadBotConfig,
   loadBotStatus,
   processFetchedJobs,
@@ -47,6 +47,7 @@ function JobMonitorCoordinator() {
     popNextAutoApplyJob,
     searchRequest,
     triggerBotSearch,
+    popNextBotSearch,
     clearBotSearch,
     notifyBotDataUpdated,
   } = useSelection();
@@ -75,6 +76,13 @@ function JobMonitorCoordinator() {
       popNextAutoApplyJob();
     }
   }, [activeAutoApplyJob, easyApplyQueue, popNextAutoApplyJob]);
+
+  // Start next queued Bot Search when idle
+  useEffect(() => {
+    if (!searchRequest) {
+      popNextBotSearch();
+    }
+  }, [searchRequest, popNextBotSearch]);
 
   // Safety timeout per Easy Apply job (28s)
   useEffect(() => {
@@ -253,14 +261,18 @@ function JobMonitorCoordinator() {
     async function runSearchIfDue(force = false) {
       const cfg = await loadBotConfig();
       if (!cfg.enabled) return;
-      if (!cfg.keywords?.trim() && !cfg.customUrl?.trim()) return;
+      const urls = buildAllLinkedInSearchUrls(cfg);
+      if (urls.length === 0) return;
 
       const st = await loadBotStatus();
       const elapsed = Date.now() - (st.lastCheckedAt || 0);
       if (force || elapsed >= FOREGROUND_CHECK_INTERVAL_MS) {
-        const url = buildLinkedInBrowserSearchUrl(cfg);
-        await appendBotLog('REFRESH', '5-Min Auto-Refresh Triggered', `Searching: ${cfg.keywords || 'Custom URL'}`);
-        triggerBotSearch(url, {
+        await appendBotLog(
+          'REFRESH',
+          '5-Min Auto-Refresh Triggered',
+          `Searching: ${[cfg.keywords, cfg.keywords2].filter(Boolean).join(' + ') || 'Custom URL'}`
+        );
+        triggerBotSearch(urls, {
           notify: true,
           showAlert: false,
           descriptionKeywords: cfg.descriptionKeywords || '',

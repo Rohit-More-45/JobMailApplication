@@ -38,6 +38,7 @@ export default function LinkedInBrowser() {
     clearScreenshots,
     externalJobUrl,
     clearExternalJobUrl,
+    navigateToAutofillUrl,
   } = useSelection();
 
   const [initialUrl] = useState(() => externalJobUrl || LINKEDIN_FEED_URL);
@@ -176,40 +177,68 @@ export default function LinkedInBrowser() {
     }
   }, []);
 
-  const handleShouldStartLoadWithRequest = useCallback((request) => {
-    const { url } = request;
-    if (
-      !url ||
-      url === 'about:blank' ||
-      url.startsWith('http://') ||
-      url.startsWith('https://') ||
-      url.startsWith('javascript:') ||
-      url.startsWith('data:') ||
-      url.startsWith('blob:')
-    ) {
-      return true;
-    }
+  const handleShouldStartLoadWithRequest = useCallback(
+    (request) => {
+      const { url, isTopFrame } = request;
+      if (
+        !url ||
+        url === 'about:blank' ||
+        url.startsWith('javascript:') ||
+        url.startsWith('data:') ||
+        url.startsWith('blob:')
+      ) {
+        return true;
+      }
 
-    // Extract browser fallback URL from Android intent:// deep links (e.g. linkedin://)
-    if (url.startsWith('intent://')) {
-      try {
-        const match = url.match(/S\.browser_fallback_url=([^;]+)/);
-        if (match && match[1] && webViewRef.current) {
-          const fallbackUrl = decodeURIComponent(match[1]);
-          if (fallbackUrl.startsWith('http://') || fallbackUrl.startsWith('https://')) {
-            webViewRef.current.injectJavaScript(`
-              window.location.href = ${JSON.stringify(fallbackUrl)};
-              true;
-            `);
+      if (isTopFrame === false) {
+        return true;
+      }
+
+      // Extract browser fallback URL from Android intent:// deep links (e.g. linkedin://)
+      if (url.startsWith('intent://')) {
+        try {
+          const match = url.match(/S\.browser_fallback_url=([^;]+)/);
+          if (match && match[1] && webViewRef.current) {
+            const fallbackUrl = decodeURIComponent(match[1]);
+            if (fallbackUrl.startsWith('http://') || fallbackUrl.startsWith('https://')) {
+              const fbHost = new URL(fallbackUrl).hostname.toLowerCase();
+              if (!fbHost.includes('linkedin.com') && !fbHost.includes('licdn.com')) {
+                navigateToAutofillUrl(fallbackUrl);
+              } else {
+                webViewRef.current.injectJavaScript(`
+                  window.location.href = ${JSON.stringify(fallbackUrl)};
+                  true;
+                `);
+              }
+            }
           }
+        } catch (_e) {}
+        return false;
+      }
+
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        return false;
+      }
+
+      // If user clicks an external job application link (non-LinkedIn / non-SSO), open in Autofill tab
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        const isLinkedInOrAuth =
+          host.includes('linkedin.com') ||
+          host.includes('licdn.com') ||
+          host.includes('accounts.google.com') ||
+          host.includes('appleid.apple.com') ||
+          host.includes('login.microsoftonline.com');
+        if (!isLinkedInOrAuth) {
+          navigateToAutofillUrl(url);
+          return false;
         }
       } catch (_e) {}
-      return false;
-    }
 
-    // Block custom app schemes (linkedin://, market://, etc.) so Android WebView doesn't throw ERR_UNKNOWN_URL_SCHEME
-    return false;
-  }, []);
+      return true;
+    },
+    [navigateToAutofillUrl]
+  );
 
   const handleLoadEnd = useCallback(() => {
     setLoading(false);
@@ -298,6 +327,7 @@ export default function LinkedInBrowser() {
               thirdPartyCookiesEnabled={true}
               allowsInlineMediaPlayback={true}
               mediaPlaybackRequiresUserAction={true}
+              setSupportMultipleWindows={false}
               scalesPageToFit={true}
               startInLoadingState={true}
               renderLoading={() => (

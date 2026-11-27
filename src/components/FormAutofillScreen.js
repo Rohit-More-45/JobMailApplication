@@ -82,6 +82,22 @@ const CUSTOM_USER_AGENT = Platform.select({
   default: undefined,
 });
 
+const IN_APP_LINK_SCRIPT = `
+(function() {
+  if (window.__jobmailInAppLinks) return;
+  window.__jobmailInAppLinks = true;
+  window.open = function(url) {
+    if (url) window.location.href = url;
+    return null;
+  };
+  document.addEventListener('click', function(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a') : null;
+    if (a && a.target === '_blank') a.target = '_self';
+  }, true);
+})();
+true;
+`;
+
 export default function FormAutofillScreen() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
@@ -96,8 +112,9 @@ export default function FormAutofillScreen() {
   const [currentFormUrl, setCurrentFormUrl] = useState(null);
   const [formLoading, setFormLoading] = useState(false);
 
-  // Add / Edit field modal
+  // Add / Edit field modal & In-Form Quick Fields Drawer
   const [modalVisible, setModalVisible] = useState(false);
+  const [fieldsDrawerVisible, setFieldsDrawerVisible] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
@@ -176,6 +193,10 @@ export default function FormAutofillScreen() {
         setEditingItem(null);
         return true;
       }
+      if (fieldsDrawerVisible) {
+        setFieldsDrawerVisible(false);
+        return true;
+      }
       if (currentFormUrl) {
         setCurrentFormUrl(null);
         return true;
@@ -185,7 +206,7 @@ export default function FormAutofillScreen() {
 
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => sub.remove();
-  }, [modalVisible, currentFormUrl]);
+  }, [modalVisible, fieldsDrawerVisible, currentFormUrl]);
 
   // Open Add modal
   const handleStartAdd = useCallback(() => {
@@ -356,6 +377,16 @@ export default function FormAutofillScreen() {
             </Text>
 
             <TouchableOpacity
+              style={styles.fieldsDrawerBtn}
+              onPress={() => setFieldsDrawerVisible(true)}
+              accessibilityLabel="View or Edit Saved Fields"
+              activeOpacity={0.8}
+            >
+              <Ionicons name="list-outline" size={14} color="#0a66c2" />
+              <Text style={styles.fieldsDrawerBtnText}>Fields</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               style={styles.autofillPillBtn}
               onPress={triggerAutofill}
               accessibilityLabel="Autofill Form"
@@ -386,7 +417,36 @@ export default function FormAutofillScreen() {
               domStorageEnabled={true}
               sharedCookiesEnabled={true}
               thirdPartyCookiesEnabled={true}
+              setSupportMultipleWindows={false}
+              originWhitelist={['*']}
+              injectedJavaScriptBeforeContentLoaded={IN_APP_LINK_SCRIPT}
               injectedJavaScript={buildAutofillScript(savedFields)}
+              onShouldStartLoadWithRequest={(req) => {
+                const { url } = req;
+                if (
+                  !url ||
+                  url === 'about:blank' ||
+                  url.startsWith('http://') ||
+                  url.startsWith('https://') ||
+                  url.startsWith('javascript:') ||
+                  url.startsWith('data:') ||
+                  url.startsWith('blob:')
+                ) {
+                  return true;
+                }
+                if (url.startsWith('intent://')) {
+                  try {
+                    const m = url.match(/S\.browser_fallback_url=([^;]+)/);
+                    if (m && m[1] && webViewRef.current) {
+                      const fb = decodeURIComponent(m[1]);
+                      if (fb.startsWith('http')) {
+                        webViewRef.current.injectJavaScript(`window.location.href=${JSON.stringify(fb)};true;`);
+                      }
+                    }
+                  } catch (_e) {}
+                }
+                return false;
+              }}
               onLoadStart={() => setFormLoading(true)}
               onLoadEnd={() => {
                 setFormLoading(false);
@@ -551,6 +611,97 @@ export default function FormAutofillScreen() {
           )}
         </View>
       )}
+
+      {/* In-Form Quick Fields Drawer Modal (See, Edit, or Add Fields while filling form) */}
+      <Modal
+        visible={fieldsDrawerVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setFieldsDrawerVisible(false)}
+      >
+        <View style={styles.drawerBackdrop}>
+          <View style={styles.drawerCard}>
+            <View style={styles.drawerHeader}>
+              <Text style={styles.modalTitle}>Saved Fields ({savedFields.length})</Text>
+              <View style={styles.drawerHeaderActions}>
+                <TouchableOpacity
+                  style={styles.drawerAddBtn}
+                  onPress={handleStartAdd}
+                >
+                  <Ionicons name="add" size={15} color="#ffffff" />
+                  <Text style={styles.drawerAddBtnText}>Add</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.drawerAutofillBtn}
+                  onPress={() => {
+                    setFieldsDrawerVisible(false);
+                    triggerAutofill();
+                  }}
+                >
+                  <Ionicons name="flash" size={14} color="#ffffff" />
+                  <Text style={styles.drawerAutofillBtnText}>Fill Form</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setFieldsDrawerVisible(false)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close" size={22} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <FlatList
+              data={savedFields}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.listContent}
+              renderItem={({ item }) => {
+                const hasText = item.value && item.value.toString().trim().length > 0;
+                const hasNum = item.numericValue && item.numericValue.toString().trim().length > 0;
+                const isPending = (!hasText && !hasNum) || item.needsAnswer;
+                return (
+                  <View style={[styles.savedItemCard, isPending && styles.pendingItemCard]}>
+                    <View style={styles.savedItemInfo}>
+                      <View style={styles.savedItemHeaderRow}>
+                        <Text style={styles.savedItemName}>{item.name}</Text>
+                        {isPending && (
+                          <View style={styles.needsAnswerBadge}>
+                            <Text style={styles.needsAnswerBadgeText}>NEEDS ANSWER</Text>
+                          </View>
+                        )}
+                        {hasNum && (
+                          <View style={styles.numericPill}>
+                            <Text style={styles.numericPillText}>Int: {item.numericValue}</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.savedItemValue} numberOfLines={2}>
+                        {isPending ? 'Tap pencil to add answer' : item.value || item.numericValue}
+                      </Text>
+                    </View>
+
+                    <View style={styles.cardActionsRow}>
+                      <TouchableOpacity
+                        style={styles.cardActionBtn}
+                        onPress={() => handleStartEdit(item)}
+                      >
+                        <Ionicons name="pencil-outline" size={16} color="#0a66c2" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.cardActionBtn}
+                        onPress={() => handleDeleteField(item.id)}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
 
       {/* Add / Edit Field Modal */}
       <Modal
@@ -874,6 +1025,75 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 6,
     gap: 4,
+  },
+  fieldsDrawerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    gap: 3,
+  },
+  fieldsDrawerBtnText: {
+    color: '#0a66c2',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  drawerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  drawerCard: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    height: '78%',
+    padding: 14,
+  },
+  drawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  drawerHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  drawerAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0a66c2',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+    gap: 3,
+  },
+  drawerAddBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  drawerAutofillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#10a37f',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+    gap: 3,
+  },
+  drawerAutofillBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
   },
   autofillPillBtnText: {
     color: '#ffffff',

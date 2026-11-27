@@ -23,6 +23,7 @@ import {
   EXPERIENCE_LEVEL_OPTIONS,
   DEFAULT_BOT_CONFIG,
   buildLinkedInBrowserSearchUrl,
+  buildAllLinkedInSearchUrls,
   loadBotConfig,
   saveBotConfig,
   loadFoundJobs,
@@ -163,8 +164,8 @@ export default function JobBotScreen() {
       await syncBackgroundBotRegistration(nextEnabled);
 
       if (nextEnabled) {
-        const searchUrl = buildLinkedInBrowserSearchUrl(updated);
-        triggerBotSearch(searchUrl, {
+        const urls = buildAllLinkedInSearchUrls(updated);
+        triggerBotSearch(urls, {
           notify: false,
           showAlert: false,
           descriptionKeywords: updated.descriptionKeywords || '',
@@ -175,8 +176,8 @@ export default function JobBotScreen() {
   );
 
   const handleSaveCondition = useCallback(async () => {
-    if (!config.keywords.trim() && !config.customUrl.trim()) {
-      Alert.alert('Missing Search Condition', 'Enter job keywords or a LinkedIn search URL.');
+    if (!config.keywords.trim() && !config.keywords2?.trim() && !config.customUrl.trim()) {
+      Alert.alert('Missing Search Condition', 'Enter at least one job title or a LinkedIn search URL.');
       return;
     }
 
@@ -191,8 +192,8 @@ export default function JobBotScreen() {
     setConfig(updated);
     await syncBackgroundBotRegistration(updated.enabled);
 
-    const searchUrl = buildLinkedInBrowserSearchUrl(updated);
-    triggerBotSearch(searchUrl, {
+    const urls = buildAllLinkedInSearchUrls(updated);
+    triggerBotSearch(urls, {
       notify: true,
       showAlert: true,
       descriptionKeywords: updated.descriptionKeywords || '',
@@ -200,8 +201,8 @@ export default function JobBotScreen() {
   }, [config, triggerBotSearch]);
 
   const handleCheckNow = useCallback(async () => {
-    if (!config.keywords.trim() && !config.customUrl.trim()) {
-      Alert.alert('Missing Search Condition', 'Enter job keywords or a LinkedIn search URL.');
+    if (!config.keywords.trim() && !config.keywords2?.trim() && !config.customUrl.trim()) {
+      Alert.alert('Missing Search Condition', 'Enter at least one job title or a LinkedIn search URL.');
       return;
     }
 
@@ -213,8 +214,8 @@ export default function JobBotScreen() {
 
     const updated = await saveBotConfig(config);
     setConfig(updated);
-    const searchUrl = buildLinkedInBrowserSearchUrl(updated);
-    triggerBotSearch(searchUrl, {
+    const urls = buildAllLinkedInSearchUrls(updated);
+    triggerBotSearch(urls, {
       notify: true,
       showAlert: true,
       descriptionKeywords: updated.descriptionKeywords || '',
@@ -392,20 +393,28 @@ export default function JobBotScreen() {
         <View style={styles.configCard}>
           <View style={styles.inputRow}>
             <TextInput
-              style={[styles.input, { flex: 1.3 }]}
-              placeholder="Keywords (e.g. .NET Developer)"
+              style={[styles.input, { flex: 1 }]}
+              placeholder="Job Title 1 (e.g. Software Engineer)"
               placeholderTextColor="#94a3b8"
               value={config.keywords}
               onChangeText={(text) => setConfig((prev) => ({ ...prev, keywords: text }))}
             />
             <TextInput
               style={[styles.input, { flex: 1 }]}
-              placeholder="Location (e.g. India)"
+              placeholder="Job Title 2 (e.g. .NET Developer)"
               placeholderTextColor="#94a3b8"
-              value={config.location}
-              onChangeText={(text) => setConfig((prev) => ({ ...prev, location: text }))}
+              value={config.keywords2 || ''}
+              onChangeText={(text) => setConfig((prev) => ({ ...prev, keywords2: text }))}
             />
           </View>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Location (e.g. India)"
+            placeholderTextColor="#94a3b8"
+            value={config.location}
+            onChangeText={(text) => setConfig((prev) => ({ ...prev, location: text }))}
+          />
 
           {/* Description Boolean Group Condition Filter (Optional) */}
           <View style={styles.filterSection}>

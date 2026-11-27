@@ -451,6 +451,7 @@ export default function GeminiBrowser() {
           domStorageEnabled={true}
           sharedCookiesEnabled={true}
           thirdPartyCookiesEnabled={true}
+          setSupportMultipleWindows={false}
           startInLoadingState={true}
           renderLoading={() => (
             <View style={styles.loadingOverlay}>
