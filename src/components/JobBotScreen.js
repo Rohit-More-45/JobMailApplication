@@ -51,6 +51,14 @@ const WORK_TYPES = [
   { label: 'On-site', value: '1' },
 ];
 
+const MAX_EXP_OPTIONS = [
+  { label: 'Any', value: 0 },
+  { label: '≤ 1 yr', value: 1 },
+  { label: '≤ 2 yrs', value: 2 },
+  { label: '≤ 3 yrs', value: 3 },
+  { label: '≤ 5 yrs', value: 5 },
+];
+
 function formatTimeAgo(timestamp) {
   if (!timestamp) return 'Never';
   const diffSec = Math.floor((Date.now() - timestamp) / 1000);
@@ -169,6 +177,7 @@ export default function JobBotScreen() {
           notify: false,
           showAlert: false,
           descriptionKeywords: updated.descriptionKeywords || '',
+          maxExperienceYears: updated.maxExperienceYears ?? 3,
         });
       }
     },
@@ -197,6 +206,7 @@ export default function JobBotScreen() {
       notify: true,
       showAlert: true,
       descriptionKeywords: updated.descriptionKeywords || '',
+      maxExperienceYears: updated.maxExperienceYears ?? 3,
     });
   }, [config, triggerBotSearch]);
 
@@ -219,6 +229,7 @@ export default function JobBotScreen() {
       notify: true,
       showAlert: true,
       descriptionKeywords: updated.descriptionKeywords || '',
+      maxExperienceYears: updated.maxExperienceYears ?? 3,
     });
   }, [config, triggerBotSearch]);
 
@@ -565,6 +576,34 @@ export default function JobBotScreen() {
                 })}
               </View>
             </ScrollView>
+          </View>
+
+          {/* Filter 2b: Max Experience Allowed in Description */}
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>Max Experience in Description</Text>
+            <View style={styles.chipGroup}>
+              {MAX_EXP_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.label}
+                  style={[
+                    styles.chip,
+                    (config.maxExperienceYears ?? 3) === opt.value && styles.chipActive,
+                  ]}
+                  onPress={() =>
+                    setConfig((prev) => ({ ...prev, maxExperienceYears: opt.value }))
+                  }
+                >
+                  <Text
+                    style={[
+                      styles.chipText,
+                      (config.maxExperienceYears ?? 3) === opt.value && styles.chipTextActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
 
           {/* Filter 3: Work Mode */}

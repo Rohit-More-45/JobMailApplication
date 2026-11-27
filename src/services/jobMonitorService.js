@@ -44,6 +44,7 @@ export const DEFAULT_BOT_CONFIG = {
   keywords: 'Software Engineer',
   keywords2: '.NET Developer',
   descriptionKeywords: '', // Optional Boolean group condition, e.g. (.net OR dotnet) AND angular
+  maxExperienceYears: 3, // Verify job description allows <= 3 years experience (0/null = Any)
   location: 'India',
   timeFilter: 'r86400',
   experienceLevels: ['2'], // Entry-level default

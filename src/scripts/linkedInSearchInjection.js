@@ -5,14 +5,16 @@ import { parseBooleanExpression } from '../utils/booleanFilter';
  *
  * Runs inside a WebView sharing cookies with the user's logged-in LinkedIn tab.
  * 1. Extracts job cards from https://www.linkedin.com/jobs/search/...
- * 2. If a Boolean description condition AST is provided, fetches each job's description
- *    using the logged-in session and evaluates the group condition (AND / OR / NOT / parentheses).
+ * 2. Fetches each job's description using the logged-in session when either:
+ *    - a Boolean description condition AST is provided, OR
+ *    - maxExperienceYears > 0 (verifies job description allows <= maxExperienceYears, e.g. 3 years).
  * No AI used.
  */
 
-export function buildSearchExtractionScript(descriptionCondition = '') {
+export function buildSearchExtractionScript(descriptionCondition = '', maxExperienceYears = 3) {
   const parsed = parseBooleanExpression(descriptionCondition || '');
   const astJson = JSON.stringify(parsed.valid ? parsed.ast : null);
+  const maxExp = Number(maxExperienceYears) > 0 ? Number(maxExperienceYears) : 0;
 
   return `
 (function() {
@@ -20,6 +22,7 @@ export function buildSearchExtractionScript(descriptionCondition = '') {
   window.__jobmailSearchExtracting = true;
 
   var conditionAst = ${astJson};
+  var maxExperienceYears = ${maxExp};
   var done = false;
   var attempts = 0;
   var maxAttempts = 20;
@@ -47,6 +50,34 @@ export function buildSearchExtractionScript(descriptionCondition = '') {
     if (ast.type === 'NOT') return !evaluateAst(ast.operand, text);
     if (ast.type === 'AND') return evaluateAst(ast.left, text) && evaluateAst(ast.right, text);
     if (ast.type === 'OR') return evaluateAst(ast.left, text) || evaluateAst(ast.right, text);
+    return true;
+  }
+
+  /**
+   * Checks if the job description requires MORE than maxExperienceYears.
+   * Returns true if allowed (e.g. 0-3 yrs, 2+ yrs, 1-3 yrs, or unspecified),
+   * false if it requires a higher minimum (e.g. 4+ years, 5-8 years, minimum 5 yrs).
+   */
+  function allowsExperience(text, maxYears) {
+    if (!maxYears || maxYears <= 0 || !text) return true;
+    var hay = text.toLowerCase();
+
+    var patterns = [
+      /(?:minimum|min\\.?|at\\s+least)\\s+(\\d{1,2})\\s*\\+?\\s*(?:years?|yrs?)\\s*(?:of\\s+)?(?:relevant\\s+|work\\s+|hands-on\\s+|professional\\s+|industry\\s+|total\\s+)?(?:experience|exp)?/gi,
+      /(\\d{1,2})\\s*(?:\\+|to|-|–)\\s*(?:\\d{1,2})?\\s*(?:years?|yrs?)\\s+(?:of\\s+)?(?:relevant\\s+|work\\s+|hands-on\\s+|professional\\s+|industry\\s+|total\\s+)?(?:experience|exp)/gi,
+      /(?:experience|exp)\\s*[:\\-]?\\s*(\\d{1,2})\\s*(?:\\+|to|-|–)\\s*(?:\\d{1,2})?\\s*(?:years?|yrs?)/gi
+    ];
+
+    for (var p = 0; p < patterns.length; p++) {
+      var re = patterns[p];
+      var match;
+      while ((match = re.exec(hay)) !== null) {
+        var minYrs = parseInt(match[1], 10);
+        if (!isNaN(minYrs) && minYrs <= 25 && minYrs > maxYears) {
+          return false;
+        }
+      }
+    }
     return true;
   }
 
@@ -212,8 +243,8 @@ export function buildSearchExtractionScript(descriptionCondition = '') {
       });
   }
 
-  function filterJobsByCondition(jobs) {
-    if (!conditionAst || !jobs.length) {
+  function filterJobsByDescription(jobs) {
+    if ((!conditionAst && !maxExperienceYears) || !jobs.length) {
       postResults(jobs, null);
       return;
     }
@@ -236,7 +267,9 @@ export function buildSearchExtractionScript(descriptionCondition = '') {
         batch.map(function(job) {
           return fetchDescriptionForJob(job).then(function(detail) {
             var combinedText = job.title + ' ' + job.company + ' ' + detail.text;
-            if (evaluateAst(conditionAst, combinedText)) {
+            var passesCondition = !conditionAst || evaluateAst(conditionAst, combinedText);
+            var passesExperience = !maxExperienceYears || allowsExperience(combinedText, maxExperienceYears);
+            if (passesCondition && passesExperience) {
               job.isEasyApply = detail.isEasyApply;
               matched.push(job);
             }
@@ -283,10 +316,10 @@ export function buildSearchExtractionScript(descriptionCondition = '') {
     if (jobs.length > 0) {
       if (attempts < 4) {
         setTimeout(function() {
-          filterJobsByCondition(extractCards());
+          filterJobsByDescription(extractCards());
         }, 900);
       } else {
-        filterJobsByCondition(jobs);
+        filterJobsByDescription(jobs);
       }
       return;
     }

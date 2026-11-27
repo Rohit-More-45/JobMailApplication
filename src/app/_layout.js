@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, View, StyleSheet, Platform, Alert } from 'react-native';
+import { AppState, View, Text, Image, Animated, StyleSheet, Platform, Alert } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -277,6 +277,7 @@ function JobMonitorCoordinator() {
           notify: true,
           showAlert: false,
           descriptionKeywords: cfg.descriptionKeywords || '',
+          maxExperienceYears: cfg.maxExperienceYears ?? 3,
         });
       }
     }
@@ -330,7 +331,10 @@ function JobMonitorCoordinator() {
             domStorageEnabled={true}
             sharedCookiesEnabled={true}
             thirdPartyCookiesEnabled={true}
-            injectedJavaScript={buildSearchExtractionScript(searchRequest.descriptionKeywords || '')}
+            injectedJavaScript={buildSearchExtractionScript(
+              searchRequest.descriptionKeywords || '',
+              searchRequest.maxExperienceYears ?? 3
+            )}
             onMessage={handleSearchWebViewMessage}
             onError={async () => {
               const reqSnapshot = searchRequest;
@@ -371,6 +375,36 @@ function JobMonitorCoordinator() {
   );
 }
 
+function LaunchWelcomeOverlay() {
+  const [visible, setVisible] = useState(true);
+  const opacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      Animated.timing(opacity, {
+        toValue: 0,
+        duration: 400,
+        useNativeDriver: true,
+      }).start(() => setVisible(false));
+    }, 1800);
+    return () => clearTimeout(timer);
+  }, [opacity]);
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View style={[styles.launchOverlay, { opacity }]} pointerEvents="none">
+      <Image
+        source={require('../../assets/launch-logo.jpg')}
+        style={styles.launchLogo}
+        resizeMode="contain"
+      />
+      <Text style={styles.launchTitle}>JobMail</Text>
+      <Text style={styles.launchSubtitle}>Made by Rohit with love ❤️</Text>
+    </Animated.View>
+  );
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
@@ -380,6 +414,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         </Stack>
+        <LaunchWelcomeOverlay />
       </SelectionProvider>
     </SafeAreaProvider>
   );
@@ -394,5 +429,30 @@ const styles = StyleSheet.create({
     top: 0,
     opacity: 0,
     overflow: 'hidden',
+  },
+  launchOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
+    paddingHorizontal: 24,
+  },
+  launchLogo: {
+    width: 140,
+    height: 140,
+    marginBottom: 16,
+  },
+  launchTitle: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#0f172a',
+    letterSpacing: -0.5,
+  },
+  launchSubtitle: {
+    marginTop: 8,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#475569',
   },
 });

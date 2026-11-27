@@ -124,7 +124,10 @@ export function SelectionProvider({ children }) {
   }, []);
 
   const triggerBotSearch = useCallback(
-    (urlOrUrls, { notify = true, showAlert = false, descriptionKeywords = '' } = {}) => {
+    (
+      urlOrUrls,
+      { notify = true, showAlert = false, descriptionKeywords = '', maxExperienceYears = 3 } = {}
+    ) => {
       const urls = Array.isArray(urlOrUrls) ? urlOrUrls.filter(Boolean) : [urlOrUrls].filter(Boolean);
       if (urls.length === 0) return;
       const items = urls.map((u, idx) => ({
@@ -133,6 +136,7 @@ export function SelectionProvider({ children }) {
         notify,
         showAlert: showAlert && idx === urls.length - 1,
         descriptionKeywords,
+        maxExperienceYears,
       }));
       setSearchQueue((prev) => [...prev, ...items]);
     },
