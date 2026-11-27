@@ -45,6 +45,7 @@ function JobMonitorCoordinator() {
     enqueueEasyApplyJobs,
     setActiveAutoApplyJob,
     popNextAutoApplyJob,
+    searchQueue,
     searchRequest,
     triggerBotSearch,
     popNextBotSearch,
@@ -79,10 +80,10 @@ function JobMonitorCoordinator() {
 
   // Start next queued Bot Search when idle
   useEffect(() => {
-    if (!searchRequest) {
+    if (!searchRequest && searchQueue.length > 0) {
       popNextBotSearch();
     }
-  }, [searchRequest, popNextBotSearch]);
+  }, [searchRequest, searchQueue, popNextBotSearch]);
 
   // Safety timeout per Easy Apply job (28s)
   useEffect(() => {
