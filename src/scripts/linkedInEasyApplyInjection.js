@@ -1,13 +1,15 @@
 /**
- * JobMail - LinkedIn Easy Apply Automation Script (Self-Learning)
+ * JobMail - LinkedIn Easy Apply Automation Script (Self-Learning + Q&A Logging)
  *
  * Runs inside a logged-in LinkedIn WebView for a single job URL.
  * 1. Matches Easy Apply text inputs, textareas, <select> dropdowns, and radio groups
  *    against the user's saved Ready Answers & previously answered questions.
- * 2. If any required/empty question has no matching saved answer, collects the exact
- *    question (+ options if select/radio) and posts status: 'QUARANTINE' with unknownQuestions
- *    so the app saves them to Autofill for the user to answer later, and quarantines the job.
- * 3. Never uses AI.
+ * 2. Enforces strict First Name / Last Name / Full Name isolation and never overwrites
+ *    pre-filled fields.
+ * 3. Logs every question asked in the modal and the answer used (qaLog).
+ * 4. If any required/empty question has no matching saved answer, collects the exact
+ *    question (+ options if select/radio) and posts status: 'QUARANTINE'.
+ * 5. Never uses AI.
  */
 
 export function buildEasyApplyScript(savedFields = []) {
@@ -25,6 +27,27 @@ export function buildEasyApplyScript(savedFields = []) {
   var finished = false;
   var stepCount = 0;
   var maxSteps = 12;
+  var qaLogMap = {};
+  var qaLogList = [];
+
+  function recordQaLog(question, answer, source) {
+    var cleanQ = cleanLabel(question);
+    if (!cleanQ) return;
+    var key = normalize(cleanQ);
+    if (!key) return;
+    var entry = {
+      question: cleanQ,
+      answer: (answer || '').toString(),
+      source: source || 'Autofill'
+    };
+    if (qaLogMap[key]) {
+      qaLogMap[key].answer = entry.answer;
+      qaLogMap[key].source = entry.source;
+    } else {
+      qaLogMap[key] = entry;
+      qaLogList.push(entry);
+    }
+  }
 
   function postResult(status, reason, unknownQuestions) {
     if (finished) return;
@@ -35,7 +58,8 @@ export function buildEasyApplyScript(savedFields = []) {
           type: 'EASY_APPLY_RESULT',
           status: status,
           reason: reason || '',
-          unknownQuestions: unknownQuestions || []
+          unknownQuestions: unknownQuestions || [],
+          qaLog: qaLogList
         }));
       }
     } catch (_e) {}
@@ -63,18 +87,42 @@ export function buildEasyApplyScript(savedFields = []) {
       .trim();
   }
 
+  function getNameCategory(label) {
+    var low = (label || '').toLowerCase();
+    if (/\\b(first\\s*name|given\\s*name|fname|forename)\\b/.test(low)) return 'firstname';
+    if (/\\b(last\\s*name|family\\s*name|surname|lname)\\b/.test(low)) return 'lastname';
+    if (/\\b(full\\s*name|your\\s*name|applicant\\s*name|candidate\\s*name)\\b/.test(low) || normalize(low) === 'name') {
+      return 'fullname';
+    }
+    return null;
+  }
+
   // Match a question label against user's saved Q&A + Ready Answers
   function findAnswerForQuestion(questionLabel) {
     if (!questionLabel) return null;
     var normQ = normalize(questionLabel);
     if (!normQ) return null;
 
-    // 1. Exact normalized match against saved questions
+    var qNameCat = getNameCategory(questionLabel);
+
+    // 1. Exact normalized match against saved questions (with strict Name isolation)
     for (var i = 0; i < savedFields.length; i++) {
       var f = savedFields[i];
+      var fNameCat = getNameCategory(f.name);
+      if (qNameCat && fNameCat && qNameCat !== fNameCat) continue;
       if (normalize(f.name) === normQ) {
         return f.value;
       }
+    }
+
+    // Strict Name category fallback (never cross-match generic Name to First/Last Name)
+    if (qNameCat) {
+      for (var ni = 0; ni < savedFields.length; ni++) {
+        if (getNameCategory(savedFields[ni].name) === qNameCat) {
+          return savedFields[ni].value;
+        }
+      }
+      return null;
     }
 
     // 2. High token-overlap match for saved custom questions (>= 75% of saved question words match)
@@ -193,6 +241,7 @@ export function buildEasyApplyScript(savedFields = []) {
         fieldType: fieldType,
         options: options || []
       });
+      recordQaLog(clean, '(Missing — added to Autofill)', 'Missing');
     }
 
     // 1. Text inputs & textareas
@@ -201,12 +250,16 @@ export function buildEasyApplyScript(savedFields = []) {
     );
     textInputs.forEach(function(el) {
       if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
-      if (el.value && el.value.toString().trim().length > 0) return;
-
       var qLabel = getElementQuestionLabel(el, modal);
+      if (el.value && el.value.toString().trim().length > 0) {
+        if (qLabel) recordQaLog(qLabel, el.value.toString().trim(), 'Pre-filled');
+        return;
+      }
+
       var answer = findAnswerForQuestion(qLabel);
       if (answer) {
         setNativeValue(el, answer);
+        recordQaLog(qLabel, answer, 'Autofill');
       } else if (qLabel) {
         recordUnknown(qLabel, 'text', []);
       }
@@ -216,17 +269,21 @@ export function buildEasyApplyScript(savedFields = []) {
     var selects = modal.querySelectorAll('select');
     selects.forEach(function(sel) {
       if (sel.offsetWidth === 0 && sel.offsetHeight === 0) return;
+      var qLabel = getElementQuestionLabel(sel, modal);
       var currentOpt = sel.options[sel.selectedIndex];
-      var currentText = currentOpt ? (currentOpt.text || '').trim().toLowerCase() : '';
+      var currentText = currentOpt ? (currentOpt.text || '').trim() : '';
+      var currentLower = currentText.toLowerCase();
       var isPlaceholder =
         !sel.value ||
-        currentText === '' ||
-        currentText.indexOf('select an option') !== -1 ||
-        currentText.indexOf('choose') === 0;
+        currentLower === '' ||
+        currentLower.indexOf('select an option') !== -1 ||
+        currentLower.indexOf('choose') === 0;
 
-      if (!isPlaceholder) return;
+      if (!isPlaceholder) {
+        if (qLabel) recordQaLog(qLabel, currentText, 'Pre-filled');
+        return;
+      }
 
-      var qLabel = getElementQuestionLabel(sel, modal);
       var optionTexts = [];
       for (var o = 0; o < sel.options.length; o++) {
         var optTxt = (sel.options[o].text || '').trim();
@@ -236,7 +293,7 @@ export function buildEasyApplyScript(savedFields = []) {
       }
 
       var answer = findAnswerForQuestion(qLabel);
-      var matchedOption = false;
+      var matchedOptionText = null;
       if (answer) {
         var normAns = normalize(answer);
         for (var idx = 0; idx < sel.options.length; idx++) {
@@ -245,13 +302,15 @@ export function buildEasyApplyScript(savedFields = []) {
           if (optNorm && (optNorm === normAns || optNorm.indexOf(normAns) !== -1 || normAns.indexOf(optNorm) !== -1)) {
             sel.selectedIndex = idx;
             sel.dispatchEvent(new Event('change', { bubbles: true }));
-            matchedOption = true;
+            matchedOptionText = (opt.text || '').trim();
             break;
           }
         }
       }
 
-      if (!matchedOption && qLabel) {
+      if (matchedOptionText) {
+        recordQaLog(qLabel, matchedOptionText, 'Autofill');
+      } else if (qLabel) {
         recordUnknown(qLabel, 'select', optionTexts.slice(0, 8));
       }
     });
@@ -262,20 +321,12 @@ export function buildEasyApplyScript(savedFields = []) {
       var radios = fs.querySelectorAll('input[type="radio"]');
       if (!radios || radios.length === 0) return;
 
-      var alreadyChecked = false;
-      for (var r = 0; r < radios.length; r++) {
-        if (radios[r].checked) {
-          alreadyChecked = true;
-          break;
-        }
-      }
-      if (alreadyChecked) return;
-
       var legendEl = fs.querySelector('legend, span[data-test-form-element-label], .fb-dash-form-element__label');
       var qLabel = cleanLabel(legendEl ? (legendEl.innerText || legendEl.textContent || '') : '');
 
       var radioLabels = [];
       var radioPairs = [];
+      var checkedLabel = null;
       radios.forEach(function(rad) {
         var lblText = '';
         if (rad.id) {
@@ -289,14 +340,20 @@ export function buildEasyApplyScript(savedFields = []) {
           if (parentLbl) lblText = (parentLbl.innerText || parentLbl.textContent || '').trim();
         }
         if (!lblText) lblText = rad.value || '';
+        if (rad.checked && lblText) checkedLabel = lblText;
         if (lblText) {
           radioLabels.push(lblText);
           radioPairs.push({ radio: rad, label: lblText });
         }
       });
 
+      if (checkedLabel) {
+        if (qLabel) recordQaLog(qLabel, checkedLabel, 'Pre-filled');
+        return;
+      }
+
       var answer = findAnswerForQuestion(qLabel);
-      var matchedRadio = false;
+      var matchedRadioLabel = null;
       if (answer) {
         var ansLower = answer.toLowerCase();
         for (var p = 0; p < radioPairs.length; p++) {
@@ -309,13 +366,15 @@ export function buildEasyApplyScript(savedFields = []) {
           ) {
             radioPairs[p].radio.click();
             radioPairs[p].radio.dispatchEvent(new Event('change', { bubbles: true }));
-            matchedRadio = true;
+            matchedRadioLabel = radioPairs[p].label;
             break;
           }
         }
       }
 
-      if (!matchedRadio && qLabel) {
+      if (matchedRadioLabel) {
+        recordQaLog(qLabel, matchedRadioLabel, 'Autofill');
+      } else if (qLabel) {
         recordUnknown(qLabel, 'radio', radioLabels);
       }
     });

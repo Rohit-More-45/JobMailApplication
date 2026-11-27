@@ -12,6 +12,7 @@ import {
   addJobToAppliedList,
   addJobToManualList,
   addJobToQuarantineList,
+  appendBotLog,
   buildLinkedInBrowserSearchUrl,
   loadBotConfig,
   loadBotStatus,
@@ -193,7 +194,14 @@ function JobMonitorCoordinator() {
         setActiveAutoApplyJob(null);
 
         if (data.status === 'APPLIED') {
-          await addJobToAppliedList(job, data.reason || 'Easy Apply submitted by Bot');
+          const qaLog = Array.isArray(data.qaLog) ? data.qaLog : [];
+          await addJobToAppliedList(job, data.reason || 'Easy Apply submitted by Bot', qaLog);
+          const qaLines = qaLog.map((q) => `Q: ${q.question}\nA: ${q.answer} (${q.source})`).join('\n\n');
+          await appendBotLog(
+            'APPLIED',
+            `Applied: ${job.title} @ ${job.company}`,
+            qaLines || 'Submitted with LinkedIn profile defaults (no extra questions).'
+          );
           await sendBotNotification(
             `Bot Applied: ${job.title}`,
             `${job.company}${job.location ? ' • ' + job.location : ''}`,
@@ -201,11 +209,19 @@ function JobMonitorCoordinator() {
           );
         } else if (data.status === 'QUARANTINE') {
           const unknown = Array.isArray(data.unknownQuestions) ? data.unknownQuestions : [];
+          const qaLog = Array.isArray(data.qaLog) ? data.qaLog : [];
           const addedCount = await saveUnknownQuestionsToAutofill(unknown);
           await addJobToQuarantineList(
             job,
             unknown,
-            data.reason || 'Unanswered question(s) — apply manually'
+            data.reason || 'Unanswered question(s) — apply manually',
+            qaLog
+          );
+          const qaLines = qaLog.map((q) => `Q: ${q.question}\nA: ${q.answer} (${q.source})`).join('\n\n');
+          await appendBotLog(
+            'QUARANTINE',
+            `Quarantined: ${job.title} @ ${job.company}`,
+            qaLines || data.reason || 'Manual step required'
           );
           if (addedCount > 0) {
             await sendBotNotification(
@@ -216,6 +232,11 @@ function JobMonitorCoordinator() {
           }
         } else {
           await addJobToManualList(job, data.reason || 'External Apply (Manual)');
+          await appendBotLog(
+            'MANUAL',
+            `Manual Apply: ${job.title} @ ${job.company}`,
+            data.reason || 'External application'
+          );
         }
         notifyBotDataUpdated();
       }
@@ -223,18 +244,24 @@ function JobMonitorCoordinator() {
   };
 
   useEffect(() => {
-    let intervalId = null;
+    let heartbeatId = null;
 
-    async function runForegroundSearch() {
+    async function runSearchIfDue(force = false) {
       const cfg = await loadBotConfig();
       if (!cfg.enabled) return;
       if (!cfg.keywords?.trim() && !cfg.customUrl?.trim()) return;
-      const url = buildLinkedInBrowserSearchUrl(cfg);
-      triggerBotSearch(url, {
-        notify: true,
-        showAlert: false,
-        descriptionKeywords: cfg.descriptionKeywords || '',
-      });
+
+      const st = await loadBotStatus();
+      const elapsed = Date.now() - (st.lastCheckedAt || 0);
+      if (force || elapsed >= FOREGROUND_CHECK_INTERVAL_MS) {
+        const url = buildLinkedInBrowserSearchUrl(cfg);
+        await appendBotLog('REFRESH', '5-Min Auto-Refresh Triggered', `Searching: ${cfg.keywords || 'Custom URL'}`);
+        triggerBotSearch(url, {
+          notify: true,
+          showAlert: false,
+          descriptionKeywords: cfg.descriptionKeywords || '',
+        });
+      }
     }
 
     async function initMonitor() {
@@ -242,22 +269,20 @@ function JobMonitorCoordinator() {
       if (config.enabled) {
         await setupJobNotifications();
         await syncBackgroundBotRegistration(true);
+        await runSearchIfDue(false);
       }
 
-      intervalId = setInterval(runForegroundSearch, FOREGROUND_CHECK_INTERVAL_MS);
+      // 20-second heartbeat ensures reliable 5-minute refresh without Android long-timer drift
+      heartbeatId = setInterval(() => {
+        runSearchIfDue(false);
+      }, 20000);
     }
 
     initMonitor();
 
     const appStateSub = AppState.addEventListener('change', async (nextState) => {
       if (nextState === 'active') {
-        const latestConfig = await loadBotConfig();
-        if (!latestConfig.enabled) return;
-        const st = await loadBotStatus();
-        const elapsed = Date.now() - (st.lastCheckedAt || 0);
-        if (elapsed >= FOREGROUND_CHECK_INTERVAL_MS) {
-          await runForegroundSearch();
-        }
+        await runSearchIfDue(false);
       }
     });
 
@@ -269,7 +294,7 @@ function JobMonitorCoordinator() {
     });
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (heartbeatId) clearInterval(heartbeatId);
       appStateSub.remove();
       notifSub.remove();
     };

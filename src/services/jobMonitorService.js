@@ -14,6 +14,7 @@ const APPLIED_JOBS_KEY = '@JobMail:job_bot_applied_jobs';
 const QUARANTINE_JOBS_KEY = '@JobMail:job_bot_quarantine_jobs';
 const MANUAL_JOBS_KEY = '@JobMail:job_bot_manual_jobs';
 const SAVED_FIELDS_KEY = '@JobMail:saved_form_fields';
+const BOT_LOGS_KEY = '@JobMail:job_bot_activity_logs';
 const STATUS_KEY = '@JobMail:job_bot_status';
 const CHANNEL_ID = 'jobmail-linkedin-alerts';
 
@@ -156,7 +157,7 @@ export async function loadQuarantineJobs() {
   return [];
 }
 
-export async function addJobToAppliedList(job, note = 'Easy Apply submitted by Bot') {
+export async function addJobToAppliedList(job, note = 'Easy Apply submitted by Bot', qaLog = []) {
   if (!job || !job.id) return;
   const [applied, manual, quarantine] = await Promise.all([
     loadAppliedJobs(),
@@ -167,6 +168,7 @@ export async function addJobToAppliedList(job, note = 'Easy Apply submitted by B
     ...job,
     appliedAt: Date.now(),
     statusNote: note,
+    qaLog: Array.isArray(qaLog) ? qaLog : [],
   };
   const updatedApplied = [entry, ...applied.filter((j) => j.id !== job.id)].slice(0, 100);
   const updatedManual = manual.filter((j) => j.id !== job.id);
@@ -178,7 +180,12 @@ export async function addJobToAppliedList(job, note = 'Easy Apply submitted by B
   ]);
 }
 
-export async function addJobToQuarantineList(job, unknownQuestions = [], note = 'Unanswered questions saved to Autofill') {
+export async function addJobToQuarantineList(
+  job,
+  unknownQuestions = [],
+  note = 'Unanswered questions saved to Autofill',
+  qaLog = []
+) {
   if (!job || !job.id) return;
   const [applied, quarantine, manual] = await Promise.all([
     loadAppliedJobs(),
@@ -190,6 +197,7 @@ export async function addJobToQuarantineList(job, unknownQuestions = [], note = 
     ...job,
     quarantinedAt: Date.now(),
     unknownQuestions: Array.isArray(unknownQuestions) ? unknownQuestions : [],
+    qaLog: Array.isArray(qaLog) ? qaLog : [],
     statusNote: note,
   };
   const updatedQuarantine = [entry, ...quarantine.filter((j) => j.id !== job.id)].slice(0, 100);
@@ -227,6 +235,36 @@ export async function clearQuarantineJobsList() {
 
 export async function clearManualJobsList() {
   await AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify([]));
+}
+
+export async function loadBotLogs() {
+  try {
+    const raw = await AsyncStorage.getItem(BOT_LOGS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (_e) {}
+  return [];
+}
+
+export async function appendBotLog(type, title, details = '') {
+  try {
+    const existing = await loadBotLogs();
+    const entry = {
+      id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      timestamp: Date.now(),
+      type,
+      title,
+      details,
+    };
+    const updated = [entry, ...existing].slice(0, 80);
+    await AsyncStorage.setItem(BOT_LOGS_KEY, JSON.stringify(updated));
+  } catch (_e) {}
+}
+
+export async function clearBotLogs() {
+  await AsyncStorage.setItem(BOT_LOGS_KEY, JSON.stringify([]));
 }
 
 function normalizeQuestionKey(str) {

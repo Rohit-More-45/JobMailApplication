@@ -14,9 +14,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { useSelection } from '../context/SelectionContext';
 import { parseBooleanExpression } from '../utils/booleanFilter';
 import {
+  FOREGROUND_CHECK_INTERVAL_MS,
   DATE_POSTED_OPTIONS,
   EXPERIENCE_LEVEL_OPTIONS,
   DEFAULT_BOT_CONFIG,
@@ -28,10 +30,12 @@ import {
   loadAppliedJobs,
   loadQuarantineJobs,
   loadManualJobs,
+  loadBotLogs,
   addJobToAppliedList,
   clearAppliedJobsList,
   clearQuarantineJobsList,
   clearManualJobsList,
+  clearBotLogs,
   loadBotStatus,
   resetSeenJobsBaseline,
   syncBackgroundBotRegistration,
@@ -55,6 +59,16 @@ function formatTimeAgo(timestamp) {
   return `${diffHr}h ago`;
 }
 
+function formatNextRefresh(lastCheckedAt, enabled) {
+  if (!enabled) return 'Paused';
+  if (!lastCheckedAt) return 'Due now';
+  const remainingMs = Math.max(0, lastCheckedAt + FOREGROUND_CHECK_INTERVAL_MS - Date.now());
+  if (remainingMs === 0) return 'Refreshing...';
+  const mins = Math.floor(remainingMs / 60000);
+  const secs = Math.floor((remainingMs % 60000) / 1000);
+  return `Next in ${mins}m ${secs}s`;
+}
+
 export default function JobBotScreen() {
   const insets = useSafeAreaInsets();
   const {
@@ -73,6 +87,8 @@ export default function JobBotScreen() {
   const [appliedJobs, setAppliedJobs] = useState([]);
   const [quarantineJobs, setQuarantineJobs] = useState([]);
   const [manualJobs, setManualJobs] = useState([]);
+  const [botLogs, setBotLogs] = useState([]);
+  const [, setTickNow] = useState(0);
   const [status, setStatus] = useState({
     lastCheckedAt: null,
     lastError: null,
@@ -81,22 +97,24 @@ export default function JobBotScreen() {
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Three-list popup modal state
+  // Job Lists popup modal state
   const [listsModalVisible, setListsModalVisible] = useState(false);
-  const [activeListTab, setActiveListTab] = useState('applied'); // 'applied' | 'quarantine' | 'manual'
+  const [activeListTab, setActiveListTab] = useState('applied'); // 'applied' | 'quarantine' | 'manual' | 'logs'
 
   const refreshLiveLists = useCallback(async () => {
-    const [jobs, applied, quarantine, manual, st] = await Promise.all([
+    const [jobs, applied, quarantine, manual, logs, st] = await Promise.all([
       loadFoundJobs(),
       loadAppliedJobs(),
       loadQuarantineJobs(),
       loadManualJobs(),
+      loadBotLogs(),
       loadBotStatus(),
     ]);
     setFoundJobs(jobs);
     setAppliedJobs(applied);
     setQuarantineJobs(quarantine);
     setManualJobs(manual);
+    setBotLogs(logs);
     setStatus(st);
   }, []);
 
@@ -111,7 +129,11 @@ export default function JobBotScreen() {
 
   useEffect(() => {
     const uiTimer = setInterval(refreshLiveLists, 10000);
-    return () => clearInterval(uiTimer);
+    const countdownTimer = setInterval(() => setTickNow((t) => t + 1), 1000);
+    return () => {
+      clearInterval(uiTimer);
+      clearInterval(countdownTimer);
+    };
   }, [refreshLiveLists]);
 
   const toggleExperienceLevel = useCallback((val) => {
@@ -228,11 +250,27 @@ export default function JobBotScreen() {
       await clearAppliedJobsList();
     } else if (activeListTab === 'quarantine') {
       await clearQuarantineJobsList();
+    } else if (activeListTab === 'logs') {
+      await clearBotLogs();
     } else {
       await clearManualJobsList();
     }
     await refreshLiveLists();
   }, [activeListTab, refreshLiveLists]);
+
+  const handleCopyAllLogs = useCallback(async () => {
+    if (!botLogs || botLogs.length === 0) return;
+    const txt = botLogs
+      .map(
+        (l) =>
+          `[${new Date(l.timestamp).toLocaleTimeString()}] [${l.type}] ${l.title}${
+            l.details ? '\n' + l.details : ''
+          }`
+      )
+      .join('\n\n---\n\n');
+    await Clipboard.setStringAsync(txt);
+    Alert.alert('Copied', 'Bot activity & Q&A logs copied to clipboard.');
+  }, [botLogs]);
 
   const handleRetryQuarantinedJob = useCallback(
     (job) => {
@@ -251,6 +289,8 @@ export default function JobBotScreen() {
       ? appliedJobs
       : activeListTab === 'quarantine'
       ? quarantineJobs
+      : activeListTab === 'logs'
+      ? botLogs
       : manualJobs;
 
   return (
@@ -264,7 +304,9 @@ export default function JobBotScreen() {
           <View>
             <Text style={styles.brandTitle}>LinkedIn Job Bot</Text>
             <Text style={styles.brandSub}>
-              {config.enabled ? 'Active • 5m auto-refresh (No AI)' : 'Paused • No AI'}
+              {config.enabled
+                ? `Active • ${formatNextRefresh(status.lastCheckedAt, true)}`
+                : 'Paused • No AI'}
             </Text>
           </View>
         </View>
@@ -587,7 +629,7 @@ export default function JobBotScreen() {
           {/* Status Bar */}
           <View style={styles.statusRow}>
             <Text style={styles.statusText}>
-              Last check: {formatTimeAgo(status.lastCheckedAt)} • Checks: {status.totalChecks || 0}
+              Last: {formatTimeAgo(status.lastCheckedAt)} • {formatNextRefresh(status.lastCheckedAt, config.enabled)} • Checks: {status.totalChecks || 0}
             </Text>
             {status.lastError ? (
               <Text style={styles.errorStatusText} numberOfLines={1}>
@@ -674,8 +716,16 @@ export default function JobBotScreen() {
           <View style={styles.modalCard}>
             {/* Modal Header */}
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Bot Job Lists</Text>
+              <Text style={styles.modalTitle}>Bot Job Lists & Logs</Text>
               <View style={styles.modalHeaderRight}>
+                {activeListTab === 'logs' && botLogs.length > 0 && (
+                  <TouchableOpacity
+                    style={styles.modalCopyBtn}
+                    onPress={handleCopyAllLogs}
+                  >
+                    <Text style={styles.modalCopyBtnText}>Copy</Text>
+                  </TouchableOpacity>
+                )}
                 {modalData.length > 0 && (
                   <TouchableOpacity
                     style={styles.modalClearBtn}
@@ -693,7 +743,7 @@ export default function JobBotScreen() {
               </View>
             </View>
 
-            {/* Three Segmented Tabs: Bot Applied vs Quarantine vs Manual Apply */}
+            {/* Segmented Tabs: Applied, Quarantine, Manual, Logs */}
             <View style={styles.segmentContainer}>
               <TouchableOpacity
                 style={[
@@ -702,16 +752,12 @@ export default function JobBotScreen() {
                 ]}
                 onPress={() => setActiveListTab('applied')}
               >
-                <Ionicons
-                  name="checkmark-circle"
-                  size={14}
-                  color={activeListTab === 'applied' ? '#ffffff' : '#10a37f'}
-                />
                 <Text
                   style={[
                     styles.segmentText,
                     activeListTab === 'applied' && styles.segmentTextActive,
                   ]}
+                  numberOfLines={1}
                 >
                   Applied ({appliedJobs.length})
                 </Text>
@@ -724,18 +770,14 @@ export default function JobBotScreen() {
                 ]}
                 onPress={() => setActiveListTab('quarantine')}
               >
-                <Ionicons
-                  name="alert-circle-outline"
-                  size={14}
-                  color={activeListTab === 'quarantine' ? '#ffffff' : '#7c3aed'}
-                />
                 <Text
                   style={[
                     styles.segmentText,
                     activeListTab === 'quarantine' && styles.segmentTextActive,
                   ]}
+                  numberOfLines={1}
                 >
-                  Quarantine ({quarantineJobs.length})
+                  Quarant. ({quarantineJobs.length})
                 </Text>
               </TouchableOpacity>
 
@@ -746,18 +788,32 @@ export default function JobBotScreen() {
                 ]}
                 onPress={() => setActiveListTab('manual')}
               >
-                <Ionicons
-                  name="hand-left-outline"
-                  size={14}
-                  color={activeListTab === 'manual' ? '#ffffff' : '#d97706'}
-                />
                 <Text
                   style={[
                     styles.segmentText,
                     activeListTab === 'manual' && styles.segmentTextActive,
                   ]}
+                  numberOfLines={1}
                 >
                   Manual ({manualJobs.length})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.segmentBtn,
+                  activeListTab === 'logs' && styles.segmentBtnLogsActive,
+                ]}
+                onPress={() => setActiveListTab('logs')}
+              >
+                <Text
+                  style={[
+                    styles.segmentText,
+                    activeListTab === 'logs' && styles.segmentTextActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  Logs ({botLogs.length})
                 </Text>
               </TouchableOpacity>
             </View>
@@ -771,6 +827,8 @@ export default function JobBotScreen() {
                       ? 'checkmark-done-outline'
                       : activeListTab === 'quarantine'
                       ? 'shield-outline'
+                      : activeListTab === 'logs'
+                      ? 'terminal-outline'
                       : 'briefcase-outline'
                   }
                   size={36}
@@ -781,6 +839,8 @@ export default function JobBotScreen() {
                     ? 'No Bot-Applied Jobs Yet'
                     : activeListTab === 'quarantine'
                     ? 'No Quarantined Jobs'
+                    : activeListTab === 'logs'
+                    ? 'No Activity Logs Yet'
                     : 'No Manual Jobs Pending'}
                 </Text>
                 <Text style={styles.modalEmptySub}>
@@ -788,9 +848,31 @@ export default function JobBotScreen() {
                     ? 'Make sure you are signed in to the LinkedIn tab so the bot can submit Easy Apply jobs automatically.'
                     : activeListTab === 'quarantine'
                     ? 'Easy Apply jobs with unknown questions are quarantined here, and the new questions are saved to your Autofill tab.'
+                    : activeListTab === 'logs'
+                    ? 'Every 5-minute refresh, Easy Apply question & answer, and Quarantine event will be logged here.'
                     : 'Non-Easy Apply jobs found by the bot will appear here for you to apply manually.'}
                 </Text>
               </View>
+            ) : activeListTab === 'logs' ? (
+              <FlatList
+                data={botLogs}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={styles.modalListContent}
+                renderItem={({ item }) => (
+                  <View style={styles.logCard}>
+                    <View style={styles.logHeaderRow}>
+                      <Text style={styles.logTypeTag}>{item.type}</Text>
+                      <Text style={styles.logTimeText}>
+                        {new Date(item.timestamp).toLocaleTimeString()}
+                      </Text>
+                    </View>
+                    <Text style={styles.logTitleText}>{item.title}</Text>
+                    {item.details ? (
+                      <Text style={styles.logDetailsText}>{item.details}</Text>
+                    ) : null}
+                  </View>
+                )}
+              />
             ) : (
               <FlatList
                 data={modalData}
@@ -837,6 +919,23 @@ export default function JobBotScreen() {
                     {item.statusNote ? (
                       <Text style={styles.modalJobNote}>{item.statusNote}</Text>
                     ) : null}
+
+                    {/* Q&A Log on Applied & Quarantine job cards */}
+                    {(activeListTab === 'applied' || activeListTab === 'quarantine') &&
+                      Array.isArray(item.qaLog) &&
+                      item.qaLog.length > 0 && (
+                        <View style={styles.qaLogBox}>
+                          <Text style={styles.qaLogHeader}>Questions & Answers Log:</Text>
+                          {item.qaLog.map((qa, qIdx) => (
+                            <View key={qIdx} style={styles.qaLogItem}>
+                              <Text style={styles.qaQuestionText}>Q: {qa.question}</Text>
+                              <Text style={styles.qaAnswerText}>
+                                A: {qa.answer} ({qa.source})
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
 
                     {activeListTab === 'quarantine' &&
                       Array.isArray(item.unknownQuestions) &&
@@ -1367,6 +1466,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  modalCopyBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#eff6ff',
+  },
+  modalCopyBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0a66c2',
+  },
   modalClearBtn: {
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -1403,6 +1513,9 @@ const styles = StyleSheet.create({
   },
   segmentBtnManualActive: {
     backgroundColor: '#d97706',
+  },
+  segmentBtnLogsActive: {
+    backgroundColor: '#0f172a',
   },
   segmentText: {
     fontSize: 12,
@@ -1507,6 +1620,66 @@ const styles = StyleSheet.create({
     color: '#6d28d9',
     fontSize: 11,
     fontWeight: '700',
+  },
+  qaLogBox: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 7,
+    padding: 8,
+    marginTop: 4,
+    gap: 5,
+  },
+  qaLogHeader: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#334155',
+    textTransform: 'uppercase',
+  },
+  qaLogItem: {
+    borderLeftWidth: 2,
+    borderLeftColor: '#0a66c2',
+    paddingLeft: 6,
+    gap: 1,
+  },
+  qaQuestionText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  qaAnswerText: {
+    fontSize: 11,
+    color: '#047857',
+  },
+  logCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 10,
+    gap: 4,
+  },
+  logHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  logTypeTag: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0a66c2',
+  },
+  logTimeText: {
+    fontSize: 10,
+    color: '#94a3b8',
+  },
+  logTitleText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  logDetailsText: {
+    fontSize: 11,
+    color: '#334155',
+    lineHeight: 16,
   },
   statusManualBadge: {
     backgroundColor: '#fef3c7',
