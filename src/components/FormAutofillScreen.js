@@ -19,6 +19,7 @@ import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSelection } from '../context/SelectionContext';
 import { buildAutofillScript } from '../scripts/formAutofillInjection';
+import { saveUnknownQuestionsToAutofill } from '../services/jobMonitorService';
 
 const STORAGE_KEY = '@JobMail:saved_form_fields';
 const SEED_KEY = '@JobMail:form_fields_seeded_v3';
@@ -100,6 +101,7 @@ export default function FormAutofillScreen() {
   const [editingItem, setEditingItem] = useState(null);
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
+  const [newFieldNumericValue, setNewFieldNumericValue] = useState('');
 
   const loadFieldsFromStorage = useCallback(async () => {
     try {
@@ -190,14 +192,16 @@ export default function FormAutofillScreen() {
     setEditingItem(null);
     setNewFieldName('');
     setNewFieldValue('');
+    setNewFieldNumericValue('');
     setModalVisible(true);
   }, []);
 
   // Open Edit modal prefilled with item's data
   const handleStartEdit = useCallback((item) => {
     setEditingItem(item);
-    setNewFieldName(item.name);
-    setNewFieldValue(item.value);
+    setNewFieldName(item.name || '');
+    setNewFieldValue(item.value || '');
+    setNewFieldNumericValue(item.numericValue || '');
     setModalVisible(true);
   }, []);
 
@@ -207,28 +211,33 @@ export default function FormAutofillScreen() {
     setEditingItem(null);
     setNewFieldName('');
     setNewFieldValue('');
+    setNewFieldNumericValue('');
   }, []);
 
   // Handle Save (Add or Update)
   const handleSaveField = useCallback(async () => {
     const name = newFieldName.trim();
     const value = newFieldValue.trim();
+    const numericValue = newFieldNumericValue.trim();
 
-    if (!name || !value) {
-      Alert.alert('Missing Info', 'Please enter both field name and value.');
+    if (!name || (!value && !numericValue)) {
+      Alert.alert('Missing Info', 'Please enter field name and at least a text or numeric value.');
       return;
     }
 
     let updated;
     if (editingItem) {
       updated = savedFields.map((f) =>
-        f.id === editingItem.id ? { ...f, name, value, needsAnswer: false } : f
+        f.id === editingItem.id
+          ? { ...f, name, value, numericValue, needsAnswer: false }
+          : f
       );
     } else {
       const newItem = {
         id: 'field_' + Date.now(),
         name,
         value,
+        numericValue,
         needsAnswer: false,
       };
       updated = [...savedFields, newItem];
@@ -238,7 +247,15 @@ export default function FormAutofillScreen() {
     await persistFields(updated);
 
     handleCloseModal();
-  }, [newFieldName, newFieldValue, editingItem, savedFields, persistFields, handleCloseModal]);
+  }, [
+    newFieldName,
+    newFieldValue,
+    newFieldNumericValue,
+    editingItem,
+    savedFields,
+    persistFields,
+    handleCloseModal,
+  ]);
 
   // Handle Delete Field
   const handleDeleteField = useCallback(
@@ -294,16 +311,29 @@ export default function FormAutofillScreen() {
   }, [savedFields]);
 
   // Handle message from WebView
-  const handleWebViewMessage = useCallback((event) => {
-    try {
-      const data = JSON.parse(event.nativeEvent.data);
-      if (data.type === 'AUTOFILL_RESULT') {
-        if (data.count > 0) {
-          Alert.alert('Autofill Complete', `Automatically filled ${data.count} matching fields.`);
+  const handleWebViewMessage = useCallback(
+    async (event) => {
+      try {
+        const data = JSON.parse(event.nativeEvent.data);
+        if (data.type === 'AUTOFILL_RESULT') {
+          let addedNewCount = 0;
+          if (Array.isArray(data.unknownFields) && data.unknownFields.length > 0) {
+            addedNewCount = await saveUnknownQuestionsToAutofill(data.unknownFields);
+            if (addedNewCount > 0) {
+              await loadFieldsFromStorage();
+            }
+          }
+          if (data.count > 0 || addedNewCount > 0) {
+            const parts = [];
+            if (data.count > 0) parts.push(`Filled ${data.count} matching field(s)`);
+            if (addedNewCount > 0) parts.push(`Added ${addedNewCount} new field(s) to Saved Answers`);
+            Alert.alert('Autofill Update', parts.join('\n'));
+          }
         }
-      }
-    } catch (_e) {}
-  }, []);
+      } catch (_e) {}
+    },
+    [loadFieldsFromStorage]
+  );
 
   return (
     <View style={[styles.container, { paddingTop: Math.max(insets.top, 8) }]}>
@@ -455,7 +485,9 @@ export default function FormAutofillScreen() {
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.listContent}
               renderItem={({ item }) => {
-                const isPending = !item.value || !item.value.toString().trim() || item.needsAnswer;
+                const hasText = item.value && item.value.toString().trim().length > 0;
+                const hasNum = item.numericValue && item.numericValue.toString().trim().length > 0;
+                const isPending = (!hasText && !hasNum) || item.needsAnswer;
                 return (
                   <View
                     style={[
@@ -471,16 +503,23 @@ export default function FormAutofillScreen() {
                             <Text style={styles.needsAnswerBadgeText}>NEEDS ANSWER</Text>
                           </View>
                         )}
+                        {hasNum && (
+                          <View style={styles.numericPill}>
+                            <Text style={styles.numericPillText}>
+                              Int: {item.numericValue}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                       {isPending ? (
                         <Text style={styles.pendingValueHint}>
                           {Array.isArray(item.options) && item.options.length > 0
                             ? `Options: ${item.options.join(' / ')} — Tap pencil to answer`
-                            : 'Tap pencil icon to add your answer for future Easy Apply jobs'}
+                            : 'Tap pencil icon to add your answer for future forms'}
                         </Text>
                       ) : (
                         <Text style={styles.savedItemValue} numberOfLines={3}>
-                          {item.value}
+                          {item.value || item.numericValue}
                         </Text>
                       )}
                     </View>
@@ -559,15 +598,25 @@ export default function FormAutofillScreen() {
               </View>
             )}
 
-            <Text style={styles.modalFieldLabel}>Field Value</Text>
+            <Text style={styles.modalFieldLabel}>Text / String Value</Text>
             <TextInput
               style={[styles.popupInput, styles.popupValueInput]}
-              placeholder="e.g. Software Engineer"
+              placeholder="e.g. 5 LPA or Software Engineer"
               placeholderTextColor="#94a3b8"
               value={newFieldValue}
               onChangeText={setNewFieldValue}
               multiline={true}
               numberOfLines={3}
+            />
+
+            <Text style={styles.modalFieldLabel}>Numeric / Integer Value (Optional)</Text>
+            <TextInput
+              style={styles.popupInput}
+              placeholder="e.g. 500000 or 5 (used when form requires a number)"
+              placeholderTextColor="#94a3b8"
+              value={newFieldNumericValue}
+              onChangeText={setNewFieldNumericValue}
+              keyboardType="numeric"
             />
 
             <View style={styles.modalButtonsRow}>
@@ -714,6 +763,19 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 9,
     fontWeight: '800',
+  },
+  numericPill: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  numericPillText: {
+    color: '#0a66c2',
+    fontSize: 9,
+    fontWeight: '700',
   },
   pendingValueHint: {
     fontSize: 12,

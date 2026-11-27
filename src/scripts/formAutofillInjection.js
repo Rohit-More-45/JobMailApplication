@@ -374,7 +374,7 @@ export function buildAutofillScript(savedFields = []) {
     // Priority 1: Exact direct match on normalized name
     for (var i = 0; i < fields.length; i++) {
       var f = fields[i];
-      if (!f || !f.name || !f.value) continue;
+      if (!f || !f.name || (!f.value && !f.numericValue)) continue;
       var fTokens = getTokens(f.name);
       var fCategory = classifyTokens(fTokens, f.name);
 
@@ -401,7 +401,7 @@ export function buildAutofillScript(savedFields = []) {
         (normElId && normElId === normF) ||
         (normElAria && normElAria === normF)
       ) {
-        return f.value;
+        return pickSavedValue(f, el);
       }
     }
 
@@ -415,12 +415,12 @@ export function buildAutofillScript(savedFields = []) {
 
       for (var c = 0; c < fields.length; c++) {
         var sf = fields[c];
-        if (!sf || !sf.name || !sf.value) continue;
+        if (!sf || !sf.name || (!sf.value && !sf.numericValue)) continue;
         var sfTokens = getTokens(sf.name);
         var sfCategory = classifyTokens(sfTokens, sf.name);
 
         if (sfCategory === elCategory) {
-          explicitMatch = sf.value;
+          explicitMatch = pickSavedValue(sf, el);
           break;
         }
 
@@ -449,7 +449,7 @@ export function buildAutofillScript(savedFields = []) {
     if (elCategory === 'other') {
       for (var m = 0; m < fields.length; m++) {
         var cf = fields[m];
-        if (!cf || !cf.name || !cf.value) continue;
+        if (!cf || !cf.name || (!cf.value && !cf.numericValue)) continue;
         var cfTokens = getTokens(cf.name);
         var cfCategory = classifyTokens(cfTokens, cf.name);
         if (cfCategory !== 'other') continue;
@@ -463,7 +463,7 @@ export function buildAutofillScript(savedFields = []) {
             }
           }
           if (allIn) {
-            return cf.value;
+            return pickSavedValue(cf, el);
           }
         }
       }
@@ -528,23 +528,105 @@ export function buildAutofillScript(savedFields = []) {
     }
   }
 
+  function pickSavedValue(field, el) {
+    if (!field) return null;
+    var isNumericEl =
+      el &&
+      ((el.getAttribute('type') || '').toLowerCase() === 'number' ||
+        (el.getAttribute('inputmode') || '').toLowerCase() === 'numeric' ||
+        (el.getAttribute('inputmode') || '').toLowerCase() === 'decimal');
+    if (isNumericEl && field.numericValue && field.numericValue.toString().trim().length > 0) {
+      return field.numericValue.toString().trim();
+    }
+    if (field.value && field.value.toString().trim().length > 0) {
+      return field.value.toString().trim();
+    }
+    if (field.numericValue && field.numericValue.toString().trim().length > 0) {
+      return field.numericValue.toString().trim();
+    }
+    return null;
+  }
+
+  function getReadableFieldLabel(el) {
+    var raw = '';
+    if (el.id) {
+      try {
+        var lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+        if (lbl) raw = lbl.innerText || lbl.textContent || '';
+      } catch (_e) {}
+    }
+    if (!raw) {
+      var pLbl = el.closest('label');
+      if (pLbl) raw = pLbl.innerText || pLbl.textContent || '';
+    }
+    if (!raw) {
+      var gContainer = el.closest('[role="listitem"], .freebirdFormviewerViewNumberedItemContainer, .geS5n, .m2');
+      if (gContainer) {
+        var gHeading = gContainer.querySelector('[role="heading"], .M7eMe, .HoDaOb');
+        if (gHeading) raw = gHeading.innerText || gHeading.textContent || '';
+      }
+    }
+    if (!raw) {
+      var fg = el.closest('.form-group, .form-row, .field, [class*="field"], [class*="group"], tr');
+      if (fg && fg !== document.body) {
+        var fgLabel = fg.querySelector('label, [class*="label"], [class*="title"], dt');
+        if (fgLabel && fgLabel !== el) raw = fgLabel.innerText || fgLabel.textContent || '';
+      }
+    }
+    if (!raw) {
+      raw = el.getAttribute('aria-label') || el.placeholder || el.name || '';
+    }
+    return raw.replace(/\\*/g, '').replace(/\\s+/g, ' ').trim();
+  }
+
   function runAutofill(fieldsList) {
     var fields = fieldsList || savedFields;
     if (!fields || fields.length === 0) return 0;
 
-    var selector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea, select';
+    var selector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="search"]), textarea, select';
     var elements = document.querySelectorAll(selector);
     var filledCount = 0;
+    var unknownFields = [];
+    var seenUnknown = {};
 
     elements.forEach(function(el) {
       if (el.offsetWidth === 0 && el.offsetHeight === 0 && !el.classList.contains('whsOnd')) {
         return; // invisible element
       }
+      if (el.disabled || el.readOnly) return;
+
       var desc = getDescriptor(el);
       var matchVal = findMatchingValue(el, desc, fields);
       if (matchVal) {
         var ok = setInputValue(el, matchVal);
         if (ok) filledCount++;
+      } else if (!el.value || el.value.toString().trim().length === 0) {
+        // Auto-detect new empty field on manual form and report back to Autofill tab
+        var label = getReadableFieldLabel(el);
+        var normLbl = normalize(label);
+        if (
+          label &&
+          label.length >= 3 &&
+          label.length <= 120 &&
+          normLbl !== 'search' &&
+          normLbl !== 'q' &&
+          normLbl !== 'captcha' &&
+          !seenUnknown[normLbl]
+        ) {
+          seenUnknown[normLbl] = true;
+          var opts = [];
+          if (el.tagName.toLowerCase() === 'select') {
+            for (var o = 0; o < el.options.length && opts.length < 6; o++) {
+              var ot = (el.options[o].text || '').trim();
+              if (ot && ot.toLowerCase().indexOf('select') === -1) opts.push(ot);
+            }
+          }
+          unknownFields.push({
+            name: label,
+            fieldType: el.tagName.toLowerCase() === 'select' ? 'select' : 'text',
+            options: opts
+          });
+        }
       }
     });
 
@@ -552,7 +634,8 @@ export function buildAutofillScript(savedFields = []) {
       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'AUTOFILL_RESULT',
-          count: filledCount
+          count: filledCount,
+          unknownFields: unknownFields
         }));
       }
     } catch(e) {}

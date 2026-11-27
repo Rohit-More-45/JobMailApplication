@@ -69,6 +69,8 @@ export async function setupJobNotifications() {
         name: 'LinkedIn Job Alerts',
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
+        enableLights: true,
+        enableVibrate: true,
         lightColor: '#0a66c2',
         sound: 'default',
       });
@@ -208,7 +210,7 @@ export async function addJobToQuarantineList(
   ]);
 }
 
-export async function addJobToManualList(job, note = 'External Apply (Manual)') {
+export async function addJobToManualList(job, note = 'External Apply (Manual)', applyUrl = null) {
   if (!job || !job.id) return;
   const [applied, quarantine, manual] = await Promise.all([
     loadAppliedJobs(),
@@ -218,11 +220,51 @@ export async function addJobToManualList(job, note = 'External Apply (Manual)') 
   if (applied.some((j) => j.id === job.id) || quarantine.some((j) => j.id === job.id)) return;
   const entry = {
     ...job,
+    applyUrl: applyUrl || job.applyUrl || null,
     addedAt: Date.now(),
     statusNote: note,
   };
   const updatedManual = [entry, ...manual.filter((j) => j.id !== job.id)].slice(0, 100);
   await AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify(updatedManual));
+}
+
+/**
+ * Resolves the direct external employer/ATS apply URL for a LinkedIn job ID
+ * from LinkedIn's jobPosting HTML (<code id="applyUrl"> or offsite apply anchor).
+ */
+export async function resolveExternalApplyUrl(jobId, fallbackUrl) {
+  if (!jobId) return fallbackUrl;
+  try {
+    const res = await fetch(`https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${jobId}`, {
+      method: 'GET',
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html',
+      },
+    });
+    if (!res.ok) return fallbackUrl;
+    const html = await res.text();
+
+    // LinkedIn embeds the direct apply URL inside <!--"https://..."--> in code#applyUrl
+    const codeMatch = html.match(/id="applyUrl"[^>]*><!--\s*"([^"]+)"\s*-->/i);
+    if (codeMatch && codeMatch[1]) {
+      const decoded = decodeHtmlEntities(codeMatch[1]);
+      if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+        return decoded;
+      }
+    }
+
+    // Fallback: look for offsite apply link with ?url= parameter
+    const offsiteMatch = html.match(/href="(https:\/\/www\.linkedin\.com\/redir\/redirect\?[^"]+)"/i);
+    if (offsiteMatch && offsiteMatch[1]) {
+      try {
+        const u = new URL(decodeHtmlEntities(offsiteMatch[1]));
+        const dest = u.searchParams.get('url');
+        if (dest && dest.startsWith('http')) return dest;
+      } catch (_e) {}
+    }
+  } catch (_e) {}
+  return fallbackUrl;
 }
 
 export async function clearAppliedJobsList() {
@@ -476,14 +518,17 @@ export function parseLinkedInJobsHtml(html) {
   return jobs;
 }
 
-export async function sendBotNotification(title, body, data = {}) {
+export async function sendBotNotification(title, body, data = {}, color = '#0a66c2', subtitle = 'JobMail Bot') {
   try {
     await Notifications.scheduleNotificationAsync({
       content: {
         title,
+        subtitle,
         body,
+        color,
         sound: 'default',
         data,
+        ...(Platform.OS === 'android' ? { channelId: CHANNEL_ID } : {}),
       },
       trigger: null,
     });
@@ -499,17 +544,20 @@ async function sendNewJobsNotification(newJobs) {
   const easyCount = newJobs.filter((j) => j.isEasyApply).length;
   const title =
     newJobs.length === 1
-      ? `New ${first.isEasyApply ? 'Easy Apply ' : ''}Job: ${first.title}`
-      : `${newJobs.length} New LinkedIn Jobs (${easyCount} Easy Apply)`;
+      ? `${first.isEasyApply ? '⚡ Easy Apply' : '💼 New Job'}: ${first.title}`
+      : `💼 ${newJobs.length} New LinkedIn Jobs (${easyCount} Easy Apply)`;
   const body =
     newJobs.length === 1
-      ? `${first.company}${first.location ? ' • ' + first.location : ''}`
+      ? `🏢 ${first.company}${first.location ? '  •  📍 ' + first.location : ''}\nTap to open`
       : `Latest: ${first.title} at ${first.company}`;
 
-  await sendBotNotification(title, body, {
-    url: first.url,
-    jobId: first.id,
-  });
+  await sendBotNotification(
+    title,
+    body,
+    { url: first.url, jobId: first.id },
+    first.isEasyApply ? '#10a37f' : '#0a66c2',
+    'LinkedIn Job Alert'
+  );
 }
 
 /**

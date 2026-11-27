@@ -203,9 +203,11 @@ function JobMonitorCoordinator() {
             qaLines || 'Submitted with LinkedIn profile defaults (no extra questions).'
           );
           await sendBotNotification(
-            `Bot Applied: ${job.title}`,
-            `${job.company}${job.location ? ' • ' + job.location : ''}`,
-            { url: job.url, jobId: job.id }
+            `✅ Applied: ${job.title}`,
+            `🏢 ${job.company}${job.location ? '  •  📍 ' + job.location : ''}\nTap to view your application`,
+            { url: job.url, jobId: job.id },
+            '#10a37f',
+            'Easy Apply Submitted'
           );
         } else if (data.status === 'QUARANTINE') {
           const unknown = Array.isArray(data.unknownQuestions) ? data.unknownQuestions : [];
@@ -225,17 +227,19 @@ function JobMonitorCoordinator() {
           );
           if (addedCount > 0) {
             await sendBotNotification(
-              `Quarantined: ${job.title}`,
-              `${addedCount} new question(s) saved to Autofill tab`,
-              { url: job.url, jobId: job.id }
+              `⚠️ Action Needed: ${job.title}`,
+              `📝 ${addedCount} new question(s) saved to Autofill tab.\nTap to review & apply`,
+              { url: job.url, jobId: job.id },
+              '#7c3aed',
+              'Quarantined Job'
             );
           }
         } else {
-          await addJobToManualList(job, data.reason || 'External Apply (Manual)');
+          await addJobToManualList(job, data.reason || 'External Apply (Manual)', data.applyUrl || null);
           await appendBotLog(
             'MANUAL',
             `Manual Apply: ${job.title} @ ${job.company}`,
-            data.reason || 'External application'
+            (data.applyUrl ? `Apply Link: ${data.applyUrl}\n` : '') + (data.reason || 'External application')
           );
         }
         notifyBotDataUpdated();

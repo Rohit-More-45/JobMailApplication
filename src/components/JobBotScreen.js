@@ -37,6 +37,7 @@ import {
   clearManualJobsList,
   clearBotLogs,
   loadBotStatus,
+  resolveExternalApplyUrl,
   resetSeenJobsBaseline,
   syncBackgroundBotRegistration,
   setupJobNotifications,
@@ -987,10 +988,12 @@ export default function JobBotScreen() {
                     <View style={styles.modalJobActions}>
                       <TouchableOpacity
                         style={styles.modalOpenBtn}
-                        onPress={() => {
+                        onPress={async () => {
                           setListsModalVisible(false);
                           if (activeListTab === 'manual') {
-                            navigateToAutofillUrl(item.url);
+                            const targetUrl =
+                              item.applyUrl || (await resolveExternalApplyUrl(item.id, item.url));
+                            navigateToAutofillUrl(targetUrl);
                           } else {
                             navigateToJobUrl(item.url);
                           }

@@ -14,7 +14,11 @@
 
 export function buildEasyApplyScript(savedFields = []) {
   const answeredFields = (Array.isArray(savedFields) ? savedFields : []).filter(
-    (f) => f && f.name && f.value && f.value.toString().trim().length > 0
+    (f) =>
+      f &&
+      f.name &&
+      ((f.value && f.value.toString().trim().length > 0) ||
+        (f.numericValue && f.numericValue.toString().trim().length > 0))
   );
   const fieldsJson = JSON.stringify(answeredFields);
 
@@ -49,7 +53,7 @@ export function buildEasyApplyScript(savedFields = []) {
     }
   }
 
-  function postResult(status, reason, unknownQuestions) {
+  function postResult(status, reason, unknownQuestions, applyUrl) {
     if (finished) return;
     finished = true;
     try {
@@ -59,10 +63,64 @@ export function buildEasyApplyScript(savedFields = []) {
           status: status,
           reason: reason || '',
           unknownQuestions: unknownQuestions || [],
-          qaLog: qaLogList
+          qaLog: qaLogList,
+          applyUrl: applyUrl || null
         }));
       }
     } catch (_e) {}
+  }
+
+  function extractExternalApplyUrl() {
+    try {
+      var codeEl = document.querySelector('code#applyUrl');
+      if (codeEl && codeEl.innerHTML) {
+        var m = codeEl.innerHTML.match(/"(https?:\\/\\/[^"]+)"/);
+        if (m && m[1]) return m[1];
+      }
+      var applyAnchor = document.querySelector('a.jobs-apply-button[href^="http"], a[data-control-name*="apply"][href^="http"]');
+      if (applyAnchor && applyAnchor.href && applyAnchor.href.indexOf('linkedin.com/jobs/view') === -1) {
+        return applyAnchor.href;
+      }
+    } catch (_e) {}
+    return null;
+  }
+
+  function expectsNumericInput(el, label) {
+    if (!el) return false;
+    var type = (el.getAttribute('type') || '').toLowerCase();
+    var inputMode = (el.getAttribute('inputmode') || '').toLowerCase();
+    var pattern = el.getAttribute('pattern') || '';
+    if (type === 'number' || inputMode === 'numeric' || inputMode === 'decimal') return true;
+    if (pattern && (pattern.indexOf('0-9') !== -1 || pattern.indexOf('\\\\d') !== -1)) return true;
+    var low = (label || '').toLowerCase();
+    if (
+      low.indexOf('how many') !== -1 ||
+      low.indexOf('years of') !== -1 ||
+      low.indexOf('number of') !== -1 ||
+      low.indexOf('in days') !== -1 ||
+      low.indexOf('numeric') !== -1 ||
+      low.indexOf('integer') !== -1 ||
+      low.indexOf('ctc') !== -1 ||
+      low.indexOf('salary') !== -1 ||
+      low.indexOf('cgpa') !== -1
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function pickFieldValue(field, preferNumeric) {
+    if (!field) return null;
+    if (preferNumeric && field.numericValue && field.numericValue.toString().trim().length > 0) {
+      return field.numericValue.toString().trim();
+    }
+    if (field.value && field.value.toString().trim().length > 0) {
+      return field.value.toString().trim();
+    }
+    if (field.numericValue && field.numericValue.toString().trim().length > 0) {
+      return field.numericValue.toString().trim();
+    }
+    return null;
   }
 
   function normalize(str) {
@@ -98,7 +156,7 @@ export function buildEasyApplyScript(savedFields = []) {
   }
 
   // Match a question label against user's saved Q&A + Ready Answers
-  function findAnswerForQuestion(questionLabel) {
+  function findAnswerForQuestion(questionLabel, preferNumeric) {
     if (!questionLabel) return null;
     var normQ = normalize(questionLabel);
     if (!normQ) return null;
@@ -111,7 +169,7 @@ export function buildEasyApplyScript(savedFields = []) {
       var fNameCat = getNameCategory(f.name);
       if (qNameCat && fNameCat && qNameCat !== fNameCat) continue;
       if (normalize(f.name) === normQ) {
-        return f.value;
+        return pickFieldValue(f, preferNumeric);
       }
     }
 
@@ -119,7 +177,7 @@ export function buildEasyApplyScript(savedFields = []) {
     if (qNameCat) {
       for (var ni = 0; ni < savedFields.length; ni++) {
         if (getNameCategory(savedFields[ni].name) === qNameCat) {
-          return savedFields[ni].value;
+          return pickFieldValue(savedFields[ni], preferNumeric);
         }
       }
       return null;
@@ -136,7 +194,7 @@ export function buildEasyApplyScript(savedFields = []) {
           if (qTokens.indexOf(sfTokens[k]) !== -1) hits++;
         }
         if (hits / sfTokens.length >= 0.75) {
-          return sf.value;
+          return pickFieldValue(sf, preferNumeric);
         }
       }
     }
@@ -148,7 +206,7 @@ export function buildEasyApplyScript(savedFields = []) {
       { test: ['email', 'e-mail'], keys: ['email'] },
       { test: ['city', 'location', 'reside', 'address'], keys: ['location', 'city'] },
       { test: ['notice period', 'how soon', 'days notice'], keys: ['notice'], transform: function(v) { var m = v.match(/\\d+/); return m ? m[0] : v; } },
-      { test: ['expected salary', 'expected ctc', 'compensation', 'desired salary'], keys: ['salary', 'ctc'] },
+      { test: ['expected salary', 'expected ctc', 'current ctc', 'compensation', 'desired salary'], keys: ['salary', 'ctc'] },
       { test: ['authorized to work', 'work authorization', 'legally authorized'], keys: ['authorization', 'work authorization'] },
       { test: ['relocate', 'relocation'], keys: ['relocate', 'relocation'] },
       { test: ['cgpa', 'gpa'], keys: ['cgpa', 'gpa'] },
@@ -174,8 +232,9 @@ export function buildEasyApplyScript(savedFields = []) {
           var fieldLower = savedFields[s].name.toLowerCase();
           for (var fk = 0; fk < rule.keys.length; fk++) {
             if (fieldLower.indexOf(rule.keys[fk]) !== -1) {
-              var val = savedFields[s].value;
-              return rule.transform ? rule.transform(val) : val;
+              var val = pickFieldValue(savedFields[s], preferNumeric);
+              if (!val) continue;
+              return (!preferNumeric && rule.transform) ? rule.transform(val) : val;
             }
           }
         }
@@ -256,10 +315,11 @@ export function buildEasyApplyScript(savedFields = []) {
         return;
       }
 
-      var answer = findAnswerForQuestion(qLabel);
+      var isNum = expectsNumericInput(el, qLabel);
+      var answer = findAnswerForQuestion(qLabel, isNum);
       if (answer) {
         setNativeValue(el, answer);
-        recordQaLog(qLabel, answer, 'Autofill');
+        recordQaLog(qLabel, answer, isNum ? 'Autofill Numeric' : 'Autofill');
       } else if (qLabel) {
         recordUnknown(qLabel, 'text', []);
       }
@@ -508,14 +568,14 @@ export function buildEasyApplyScript(savedFields = []) {
 
     var externalApplyBtn = findButtonByText(document, ['apply now', 'apply on company', 'apply']);
     if (externalApplyBtn && stepCount >= 2) {
-      postResult('NOT_EASY_APPLY', 'External application required', []);
+      postResult('NOT_EASY_APPLY', 'External application required', [], extractExternalApplyUrl());
       return;
     }
 
     if (stepCount < 6) {
       setTimeout(tick, 1500);
     } else {
-      postResult('NOT_EASY_APPLY', 'Easy Apply button not found', []);
+      postResult('NOT_EASY_APPLY', 'Easy Apply button not found', [], extractExternalApplyUrl());
     }
   }
 
