@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -297,9 +297,10 @@ export default function JobBotScreen() {
     [enqueueEasyApplyJobs]
   );
 
-  const appliedIdsSet = new Set(appliedJobs.map((j) => j.id));
-  const pendingEasyApplyJobs = foundJobs.filter(
-    (j) => j.isEasyApply && !appliedIdsSet.has(j.id)
+  const appliedIdsSet = useMemo(() => new Set(appliedJobs.map((j) => j.id)), [appliedJobs]);
+  const pendingEasyApplyJobs = useMemo(
+    () => foundJobs.filter((j) => j.isEasyApply && !appliedIdsSet.has(j.id)),
+    [foundJobs, appliedIdsSet]
   );
 
   const handleRunEasyApplyNow = useCallback(() => {
@@ -1039,9 +1040,19 @@ export default function JobBotScreen() {
                         onPress={async () => {
                           setListsModalVisible(false);
                           if (activeListTab === 'manual') {
-                            const targetUrl =
+                            const resolvedUrl =
                               item.applyUrl || (await resolveExternalApplyUrl(item.id, item.url));
-                            navigateToAutofillUrl(targetUrl);
+                            const isLinkedIn =
+                              resolvedUrl &&
+                              (resolvedUrl.includes('linkedin.com/jobs/') ||
+                                resolvedUrl.includes('linkedin.com/comm/'));
+                            if (isLinkedIn || !resolvedUrl) {
+                              // Open in LinkedIn tab so the user sees the Apply button
+                              navigateToJobUrl(item.url);
+                            } else {
+                              // External apply link: open in Autofill tab
+                              navigateToAutofillUrl(resolvedUrl);
+                            }
                           } else {
                             navigateToJobUrl(item.url);
                           }

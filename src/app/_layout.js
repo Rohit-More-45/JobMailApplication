@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { AppState, View, Text, Image, Animated, StyleSheet, Platform, Alert } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -141,7 +141,7 @@ function JobMonitorCoordinator() {
     };
   }, [searchRequest, clearBotSearch, notifyBotDataUpdated]);
 
-  const handleSearchWebViewMessage = async (event) => {
+  const handleSearchWebViewMessage = useCallback(async (event) => {
     if (!searchRequest) return;
     try {
       const data = JSON.parse(event.nativeEvent.data);
@@ -170,6 +170,22 @@ function JobMonitorCoordinator() {
 
         res = await processFetchedJobs(data.jobs || [], { notify: reqSnapshot.notify });
 
+        // Handle quarantine jobs from experience filter (unclear range)
+        const qJobs = Array.isArray(data.quarantineJobs) ? data.quarantineJobs : [];
+        for (const qJob of qJobs) {
+          await addJobToQuarantineList(
+            qJob,
+            [],
+            qJob.quarantineReason || 'Experience range unclear — apply manually',
+            []
+          );
+          await appendBotLog(
+            'QUARANTINE',
+            `Exp-Quarantine: ${qJob.title} @ ${qJob.company}`,
+            qJob.quarantineReason || 'Experience range straddles your max — check manually'
+          );
+        }
+
         if (cfg.autoApplyEasyApply && res?.easyApplyJobs?.length > 0) {
           enqueueEasyApplyJobs(res.easyApplyJobs);
         }
@@ -188,9 +204,11 @@ function JobMonitorCoordinator() {
         }
       }
     } catch (_e) {}
-  };
+  }, [
+    searchRequest, clearBotSearch, notifyBotDataUpdated, enqueueEasyApplyJobs,
+  ]);
 
-  const handleEasyApplyMessage = async (event) => {
+  const handleEasyApplyMessage = useCallback(async (event) => {
     if (!activeAutoApplyJob) return;
     try {
       const data = JSON.parse(event.nativeEvent.data);
@@ -254,7 +272,9 @@ function JobMonitorCoordinator() {
         notifyBotDataUpdated();
       }
     } catch (_e) {}
-  };
+  }, [
+    activeAutoApplyJob, setActiveAutoApplyJob, notifyBotDataUpdated,
+  ]);
 
   useEffect(() => {
     let heartbeatId = null;

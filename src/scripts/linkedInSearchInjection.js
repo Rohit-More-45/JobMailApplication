@@ -54,34 +54,96 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
   }
 
   /**
-   * Checks if the job description requires MORE than maxExperienceYears.
-   * Returns true if allowed (e.g. 0-3 yrs, 2+ yrs, 1-3 yrs, or unspecified),
-   * false if it requires a higher minimum (e.g. 4+ years, 5-8 years, minimum 5 yrs).
+   * Checks if the job description allows <= maxYears of experience.
+   * Returns 'allow', 'quarantine', or 'reject'.
+   *
+   * Patterns handled (case-insensitive):
+   *   "Experience: 6–9 Years"           -> min=6
+   *   "Experience: 6-9 Years"           -> min=6
+   *   "Experience: 2 to 5 Years"        -> min=2
+   *   "Experience: 8+ years"            -> min=8
+   *   "Exp: 5 to 10 Years"              -> min=5
+   *   "Experince Range - 5 plus Years"  -> min=5
+   *   "0–3 years experience"            -> min=0, max=3
+   *   "1–3 Years"                       -> min=1, max=3
+   *   "4 years of experience"           -> single=4
+   *   "minimum 5 years"                 -> min=5
+   *   "5+ years"                        -> min=5
+   *
+   * Logic:
+   *   - If min > maxYears -> 'reject'
+   *   - If range straddles (min <= maxYears AND max > maxYears+1) -> 'quarantine'
+   *   - Else -> 'allow'
+   *   - No experience info found -> 'allow'
    */
   function allowsExperience(text, maxYears) {
-    if (!maxYears || maxYears <= 0 || !text) return true;
+    if (!maxYears || maxYears <= 0 || !text) return 'allow';
     var hay = text.toLowerCase();
 
-    var patterns = [
-      /(?:minimum|min\\.?|at\\s+least)\\s+(\\d{1,2})\\s*\\+?\\s*(?:years?|yrs?)\\s*(?:of\\s+)?(?:relevant\\s+|work\\s+|hands-on\\s+|professional\\s+|industry\\s+|total\\s+)?(?:experience|exp)?/gi,
-      /(\\d{1,2})\\s*(?:\\+|to|-|–)\\s*(?:\\d{1,2})?\\s*(?:years?|yrs?)\\s+(?:of\\s+)?(?:relevant\\s+|work\\s+|hands-on\\s+|professional\\s+|industry\\s+|total\\s+)?(?:experience|exp)/gi,
-      /(?:experience|exp)\\s*[:\\-]?\\s*(\\d{1,2})\\s*(?:\\+|to|-|–)\\s*(?:\\d{1,2})?\\s*(?:years?|yrs?)/gi
-    ];
+    var result = 'allow';
 
-    for (var p = 0; p < patterns.length; p++) {
-      var re = patterns[p];
-      var match;
-      while ((match = re.exec(hay)) !== null) {
-        var minYrs = parseInt(match[1], 10);
-        if (!isNaN(minYrs) && minYrs <= 25 && minYrs > maxYears) {
-          return false;
-        }
+    // Helper: extract number from string
+    function toNum(s) { return s ? parseInt(s, 10) : NaN; }
+
+    // Pattern A: "X+ years", "X plus years", "X or more years"
+    // e.g. "8+ years", "5 plus years", "3 or more years"
+    var reA = /(\\d{1,2})\\s*(?:\\+|plus|or\\s+more)\\s*(?:years?|yrs?)/gi;
+    var m;
+    while ((m = reA.exec(hay)) !== null) {
+      var n = toNum(m[1]);
+      if (!isNaN(n) && n >= 0 && n <= 40) {
+        if (n > maxYears) return 'reject';
       }
     }
-    return true;
+
+    // Pattern B: "X to Y years" or "X–Y years" (em-dash, en-dash, or hyphen)
+    // e.g. "2 to 5 Years", "6–9 Years", "1-3 Years"
+    // Note: hyphen used as range separator between digits (not "X-year" compound)
+    var reB = /(\\d{1,2})\\s*(?:to|\\u2013|\\u2014|-)\\s*(\\d{1,2})\\s*(?:years?|yrs?)/gi;
+    while ((m = reB.exec(hay)) !== null) {
+      var lo = toNum(m[1]);
+      var hi = toNum(m[2]);
+      if (!isNaN(lo) && !isNaN(hi) && lo >= 0 && hi <= 40 && lo <= hi) {
+        if (lo > maxYears) return 'reject';
+        // Range straddles boundary -> quarantine (don't lose it)
+        if (hi > maxYears + 1 && result === 'allow') result = 'quarantine';
+      }
+    }
+
+    // Pattern C: "experience: X" or "exp: X" or "experience of X years"
+    // "Experience: 6–9" already caught by B; this catches "experience: 4 years"
+    // Also catches "Experince Range - 5 plus Years" and "Exp - 5 plus"
+    var reC = /(?:experience|exp(?:erience|rince)?)\\s*(?:range)?\\s*[:\\u2013\\-]?\\s*(\\d{1,2})\\s*(?:years?|yrs?)/gi;
+    while ((m = reC.exec(hay)) !== null) {
+      var n2 = toNum(m[1]);
+      if (!isNaN(n2) && n2 >= 0 && n2 <= 40) {
+        if (n2 > maxYears) return 'reject';
+      }
+    }
+
+    // Pattern D: "minimum X years", "min X years", "at least X years"
+    var reD = /(?:minimum|min\\.?|at\\s+least)\\s+(\\d{1,2})\\s*(?:years?|yrs?)/gi;
+    while ((m = reD.exec(hay)) !== null) {
+      var n3 = toNum(m[1]);
+      if (!isNaN(n3) && n3 >= 0 && n3 <= 40) {
+        if (n3 > maxYears) return 'reject';
+      }
+    }
+
+    // Pattern E: "X years of experience" (single value, no range)
+    // Only match if it's NOT already a range (the range pattern B would have caught "X-Y years")
+    var reE = /(\\d{1,2})\\s*(?:years?|yrs?)\\s+(?:of\\s+)?(?:relevant\\s+|work\\s+|hands.on\\s+|professional\\s+|industry\\s+|total\\s+)?experience/gi;
+    while ((m = reE.exec(hay)) !== null) {
+      var n4 = toNum(m[1]);
+      if (!isNaN(n4) && n4 >= 0 && n4 <= 40) {
+        if (n4 > maxYears) return 'reject';
+      }
+    }
+
+    return result;
   }
 
-  function postResults(jobs, error) {
+  function postResults(jobs, quarantineJobs, error) {
     if (done) return;
     done = true;
     try {
@@ -89,6 +151,7 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'JOB_SEARCH_RESULTS',
           jobs: jobs || [],
+          quarantineJobs: quarantineJobs || [],
           error: error || null
         }));
       }
@@ -245,32 +308,42 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
 
   function filterJobsByDescription(jobs) {
     if ((!conditionAst && !maxExperienceYears) || !jobs.length) {
-      postResults(jobs, null);
+      postResults(jobs, [], null);
       return;
     }
 
-    var candidates = jobs.slice(0, 15);
+    var candidates = jobs.slice(0, 10);
     var matched = [];
+    var quarantined = [];
     var idx = 0;
 
     function nextBatch() {
       if (done) return;
       if (idx >= candidates.length) {
-        postResults(matched, null);
+        postResults(matched, quarantined, null);
         return;
       }
 
-      var batch = candidates.slice(idx, idx + 5);
-      idx += 5;
+      var batch = candidates.slice(idx, idx + 3);
+      idx += 3;
 
       Promise.all(
         batch.map(function(job) {
           return fetchDescriptionForJob(job).then(function(detail) {
             var combinedText = job.title + ' ' + job.company + ' ' + detail.text;
             var passesCondition = !conditionAst || evaluateAst(conditionAst, combinedText);
-            var passesExperience = !maxExperienceYears || allowsExperience(combinedText, maxExperienceYears);
-            if (passesCondition && passesExperience) {
-              job.isEasyApply = detail.isEasyApply;
+            if (!passesCondition) return; // description condition filter: drop it
+
+            var expResult = maxExperienceYears ? allowsExperience(combinedText, maxExperienceYears) : 'allow';
+            job.isEasyApply = detail.isEasyApply;
+
+            if (expResult === 'reject') {
+              // Too much experience required: silently drop
+            } else if (expResult === 'quarantine') {
+              // Unclear range: keep for manual review
+              job.quarantineReason = 'Experience range unclear — apply manually';
+              quarantined.push(job);
+            } else {
               matched.push(job);
             }
           });
@@ -292,7 +365,7 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
       href.indexOf('/authwall') !== -1 ||
       document.querySelector('input[name="session_key"]')
     ) {
-      postResults([], 'AUTH_REQUIRED');
+      postResults([], [], 'AUTH_REQUIRED');
       return;
     }
 
@@ -301,7 +374,7 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
       bodyText.indexOf('no matching jobs found') !== -1 ||
       bodyText.indexOf('did not match any jobs') !== -1
     ) {
-      postResults([], null);
+      postResults([], [], null);
       return;
     }
 
@@ -327,7 +400,7 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
     if (attempts < maxAttempts) {
       setTimeout(poll, 750);
     } else {
-      postResults([], null);
+      postResults([], [], null);
     }
   }
 
@@ -335,7 +408,7 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
 
   setTimeout(function() {
     if (!done) {
-      postResults([], 'SEARCH_TIMEOUT');
+      postResults([], [], 'SEARCH_TIMEOUT');
     }
   }, 28000);
 })();

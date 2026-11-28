@@ -183,30 +183,36 @@ export default function FormAutofillScreen() {
     }
   }, []);
 
-  // Handle hardware back on Android
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
+  // Handle hardware back on Android — use useFocusEffect so it only fires when this tab is active
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return;
 
-    const onBackPress = () => {
-      if (modalVisible) {
-        setModalVisible(false);
-        setEditingItem(null);
-        return true;
-      }
-      if (fieldsDrawerVisible) {
-        setFieldsDrawerVisible(false);
-        return true;
-      }
-      if (currentFormUrl) {
-        setCurrentFormUrl(null);
-        return true;
-      }
-      return false;
-    };
+      const onBackPress = () => {
+        if (modalVisible) {
+          setModalVisible(false);
+          setEditingItem(null);
+          return true;
+        }
+        if (fieldsDrawerVisible) {
+          setFieldsDrawerVisible(false);
+          return true;
+        }
+        if (currentFormUrl) {
+          if (webViewRef.current) {
+            webViewRef.current.goBack();
+          } else {
+            setCurrentFormUrl(null);
+          }
+          return true;
+        }
+        return false;
+      };
 
-    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-    return () => sub.remove();
-  }, [modalVisible, fieldsDrawerVisible, currentFormUrl]);
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => sub.remove();
+    }, [modalVisible, fieldsDrawerVisible, currentFormUrl])
+  );
 
   // Open Add modal
   const handleStartAdd = useCallback(() => {
