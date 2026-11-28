@@ -291,7 +291,7 @@ function JobMonitorCoordinator() {
         await appendBotLog(
           'REFRESH',
           '5-Min Auto-Refresh Triggered',
-          `Searching: ${[cfg.keywords, cfg.keywords2].filter(Boolean).join(' + ') || 'Custom URL'}`
+          `Searching: ${[cfg.keywords, cfg.keywords2, cfg.keywords3].filter(Boolean).join(' + ') || 'Custom URL'}`
         );
         triggerBotSearch(urls, {
           notify: true,

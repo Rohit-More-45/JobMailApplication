@@ -105,8 +105,9 @@ export function buildSearchExtractionScript(descriptionCondition = '', maxExperi
       var hi = toNum(m[2]);
       if (!isNaN(lo) && !isNaN(hi) && lo >= 0 && hi <= 40 && lo <= hi) {
         if (lo > maxYears) return 'reject';
-        // Range straddles boundary -> quarantine (don't lose it)
-        if (hi > maxYears + 1 && result === 'allow') result = 'quarantine';
+        // Allow ranges up to maxYears+2 (e.g. 3 to 5 years when maxYears=3);
+        // wider straddling ranges (e.g. 2 to 7) go to quarantine so we don't lose them
+        if (hi > maxYears + 2 && result === 'allow') result = 'quarantine';
       }
     }
 

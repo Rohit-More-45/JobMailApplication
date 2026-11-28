@@ -371,10 +371,11 @@ export function buildAutofillScript(savedFields = []) {
     var elTokens = getTokens(descriptor);
     var elCategory = classifyTokens(elTokens, descriptor);
 
-    // Priority 1: Exact direct match on normalized name
+    // Priority 1: Exact direct match on normalized name or readable label
+    var normReadable = normalize(getReadableFieldLabel(el));
     for (var i = 0; i < fields.length; i++) {
       var f = fields[i];
-      if (!f || !f.name || (!f.value && !f.numericValue)) continue;
+      if (!f || !f.name || !hasAnyFieldValue(f)) continue;
       var fTokens = getTokens(f.name);
       var fCategory = classifyTokens(fTokens, f.name);
 
@@ -396,31 +397,29 @@ export function buildAutofillScript(savedFields = []) {
       var normElAria = normalize(el.getAttribute('aria-label') || '');
 
       if (
+        (normReadable && normReadable === normF) ||
         (normElName && normElName === normF) ||
         (normElPlaceholder && normElPlaceholder === normF) ||
         (normElId && normElId === normF) ||
         (normElAria && normElAria === normF)
       ) {
-        return pickSavedValue(f, el);
+        return { value: pickSavedValue(f, el), allValues: getAllSavedValues(f, el) };
       }
     }
 
     // Priority 2: Semantic Category Match with strict isolation
-    // firstname ONLY matches firstname (or derives from multi-word fullname if no firstname saved)
-    // lastname ONLY matches lastname (or derives from multi-word fullname if no lastname saved)
-    // fullname ONLY matches fullname
     if (elCategory !== 'other') {
-      var explicitMatch = null;
+      var explicitField = null;
       var fullNameField = null;
 
       for (var c = 0; c < fields.length; c++) {
         var sf = fields[c];
-        if (!sf || !sf.name || (!sf.value && !sf.numericValue)) continue;
+        if (!sf || !sf.name || !hasAnyFieldValue(sf)) continue;
         var sfTokens = getTokens(sf.name);
         var sfCategory = classifyTokens(sfTokens, sf.name);
 
         if (sfCategory === elCategory) {
-          explicitMatch = pickSavedValue(sf, el);
+          explicitField = sf;
           break;
         }
 
@@ -429,18 +428,22 @@ export function buildAutofillScript(savedFields = []) {
         }
       }
 
-      if (explicitMatch) {
-        return explicitMatch;
+      if (explicitField) {
+        return {
+          value: pickSavedValue(explicitField, el),
+          allValues: getAllSavedValues(explicitField, el)
+        };
       }
 
       // Fallback derivation for First Name / Last Name if Full Name is available
       if (fullNameField && fullNameField.value) {
         var nameParts = fullNameField.value.trim().split(/\\s+/);
         if (elCategory === 'firstname' && nameParts.length >= 1) {
-          return nameParts[0];
+          return { value: nameParts[0], allValues: [nameParts[0]] };
         }
         if (elCategory === 'lastname' && nameParts.length >= 2) {
-          return nameParts.slice(1).join(' ');
+          var ln = nameParts.slice(1).join(' ');
+          return { value: ln, allValues: [ln] };
         }
       }
     }
@@ -449,7 +452,7 @@ export function buildAutofillScript(savedFields = []) {
     if (elCategory === 'other') {
       for (var m = 0; m < fields.length; m++) {
         var cf = fields[m];
-        if (!cf || !cf.name || (!cf.value && !cf.numericValue)) continue;
+        if (!cf || !cf.name || !hasAnyFieldValue(cf)) continue;
         var cfTokens = getTokens(cf.name);
         var cfCategory = classifyTokens(cfTokens, cf.name);
         if (cfCategory !== 'other') continue;
@@ -463,7 +466,7 @@ export function buildAutofillScript(savedFields = []) {
             }
           }
           if (allIn) {
-            return pickSavedValue(cf, el);
+            return { value: pickSavedValue(cf, el), allValues: getAllSavedValues(cf, el) };
           }
         }
       }
@@ -472,23 +475,65 @@ export function buildAutofillScript(savedFields = []) {
     return null;
   }
 
-  function setInputValue(el, value) {
-    if (!el || value === undefined || value === null) return false;
+  function hasAnyFieldValue(field) {
+    if (!field) return false;
+    if (field.value && field.value.toString().trim().length > 0) return true;
+    if (field.numericValue && field.numericValue.toString().trim().length > 0) return true;
+    if (Array.isArray(field.altValues) && field.altValues.some(function(v) { return v && v.toString().trim().length > 0; })) {
+      return true;
+    }
+    return false;
+  }
 
-    // RULE: Never overwrite existing user-entered text
-    if (el.value && el.value.toString().trim().length > 0) {
+  function getAllSavedValues(field, el) {
+    var list = [];
+    var seen = {};
+    function pushVal(v) {
+      if (v === undefined || v === null) return;
+      var s = v.toString().trim();
+      if (!s || seen[s]) return;
+      seen[s] = true;
+      list.push(s);
+    }
+    var primary = pickSavedValue(field, el);
+    pushVal(primary);
+    if (Array.isArray(field.altValues)) {
+      for (var i = 0; i < field.altValues.length; i++) {
+        pushVal(field.altValues[i]);
+      }
+    }
+    pushVal(field.value);
+    pushVal(field.numericValue);
+    return list;
+  }
+
+  function setInputValue(el, matchResult) {
+    var value = typeof matchResult === 'string' ? matchResult : (matchResult && matchResult.value);
+    var allValues = (matchResult && Array.isArray(matchResult.allValues)) ? matchResult.allValues : (value ? [value] : []);
+    if (!el || allValues.length === 0) return false;
+
+    // RULE: Never overwrite existing user-entered text (for select, check placeholder)
+    if (el.tagName.toLowerCase() !== 'select' && el.value && el.value.toString().trim().length > 0) {
       return false;
     }
 
     try {
       if (el.tagName.toLowerCase() === 'select') {
-        var valNorm = normalize(value);
-        for (var o = 0; o < el.options.length; o++) {
-          var opt = el.options[o];
-          if (normalize(opt.text).indexOf(valNorm) !== -1 || normalize(opt.value).indexOf(valNorm) !== -1) {
-            el.selectedIndex = o;
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
+        var curOpt = el.options[el.selectedIndex];
+        var curTxt = curOpt ? (curOpt.text || '').trim().toLowerCase() : '';
+        if (el.value && curTxt && curTxt.indexOf('select') === -1 && curTxt.indexOf('choose') !== 0) {
+          return false; // Already has a non-placeholder selection
+        }
+        for (var vIdx = 0; vIdx < allValues.length; vIdx++) {
+          var valNorm = normalize(allValues[vIdx]);
+          if (!valNorm) continue;
+          for (var o = 0; o < el.options.length; o++) {
+            var opt = el.options[o];
+            if (normalize(opt.text) === valNorm || normalize(opt.value) === valNorm) {
+              el.selectedIndex = o;
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              return true;
+            }
           }
         }
         return false;
@@ -596,9 +641,9 @@ export function buildAutofillScript(savedFields = []) {
       if (el.disabled || el.readOnly) return;
 
       var desc = getDescriptor(el);
-      var matchVal = findMatchingValue(el, desc, fields);
-      if (matchVal) {
-        var ok = setInputValue(el, matchVal);
+      var matchResult = findMatchingValue(el, desc, fields);
+      if (matchResult) {
+        var ok = setInputValue(el, matchResult);
         if (ok) filledCount++;
       } else if (!el.value || el.value.toString().trim().length === 0) {
         // Auto-detect new empty field on manual form and report back to Autofill tab
@@ -630,6 +675,106 @@ export function buildAutofillScript(savedFields = []) {
       }
     });
 
+    // Radio button groups (standard <input type="radio"> + Google Forms [role="radiogroup"])
+    function handleRadioGroup(groupLabel, pairs) {
+      if (!groupLabel || !pairs || pairs.length === 0) return;
+      for (var c = 0; c < pairs.length; c++) {
+        if (pairs[c].checked) return; // already answered
+      }
+      var syntheticEl = pairs[0].el;
+      var desc = (groupLabel + ' ' + getDescriptor(syntheticEl)).toLowerCase();
+      var matchResult = findMatchingValue(syntheticEl, desc, fields);
+      var optLabels = pairs.map(function(p) { return p.label; }).filter(Boolean);
+
+      if (matchResult && matchResult.allValues && matchResult.allValues.length > 0) {
+        for (var v = 0; v < matchResult.allValues.length; v++) {
+          var candNorm = normalize(matchResult.allValues[v]);
+          if (!candNorm) continue;
+          for (var p = 0; p < pairs.length; p++) {
+            if (normalize(pairs[p].label) === candNorm || normalize(pairs[p].value) === candNorm) {
+              pairs[p].el.click();
+              pairs[p].el.dispatchEvent(new Event('change', { bubbles: true }));
+              filledCount++;
+              return;
+            }
+          }
+        }
+      }
+
+      var cleanG = groupLabel.replace(/\\*/g, '').replace(/\\s+/g, ' ').trim();
+      var normG = normalize(cleanG);
+      if (cleanG && cleanG.length >= 3 && !seenUnknown[normG]) {
+        seenUnknown[normG] = true;
+        unknownFields.push({
+          name: cleanG,
+          fieldType: 'radio',
+          options: optLabels.slice(0, 8)
+        });
+      }
+    }
+
+    var radioBuckets = {};
+    var radioBucketOrder = [];
+    document.querySelectorAll('input[type="radio"]').forEach(function(rad) {
+      if (rad.disabled) return;
+      var key = rad.name || (rad.closest('fieldset') ? ('fs_' + Array.prototype.indexOf.call(document.querySelectorAll('fieldset'), rad.closest('fieldset'))) : null);
+      if (!key) return;
+      if (!radioBuckets[key]) {
+        radioBuckets[key] = [];
+        radioBucketOrder.push(key);
+      }
+      var rLabel = '';
+      if (rad.id) {
+        try {
+          var l = document.querySelector('label[for="' + CSS.escape(rad.id) + '"]');
+          if (l) rLabel = (l.innerText || l.textContent || '').trim();
+        } catch (_e) {}
+      }
+      if (!rLabel) {
+        var pl = rad.closest('label');
+        if (pl) rLabel = (pl.innerText || pl.textContent || '').trim();
+      }
+      if (!rLabel) rLabel = rad.value || '';
+      radioBuckets[key].push({ el: rad, label: rLabel, value: rad.value || rLabel, checked: !!rad.checked });
+    });
+
+    radioBucketOrder.forEach(function(key) {
+      var pairs = radioBuckets[key];
+      var first = pairs[0].el;
+      var fs = first.closest('fieldset');
+      var gLabel = '';
+      if (fs) {
+        var leg = fs.querySelector('legend, [class*="label"], [class*="title"]');
+        if (leg) gLabel = leg.innerText || leg.textContent || '';
+      }
+      if (!gLabel) gLabel = getReadableFieldLabel(first);
+      handleRadioGroup(gLabel, pairs);
+    });
+
+    document.querySelectorAll('[role="radiogroup"]').forEach(function(rg) {
+      var items = rg.querySelectorAll('[role="radio"]');
+      if (!items || items.length === 0) return;
+      var pairs = [];
+      items.forEach(function(item) {
+        var lbl = item.getAttribute('data-value') || item.getAttribute('aria-label') || item.innerText || item.textContent || '';
+        pairs.push({
+          el: item,
+          label: lbl.trim(),
+          value: (item.getAttribute('data-value') || lbl).trim(),
+          checked: item.getAttribute('aria-checked') === 'true'
+        });
+      });
+      var gLabel = rg.getAttribute('aria-label') || '';
+      if (!gLabel) {
+        var gc = rg.closest('[role="listitem"], .freebirdFormviewerViewNumberedItemContainer, .geS5n');
+        if (gc) {
+          var gh = gc.querySelector('[role="heading"], .M7eMe, .HoDaOb');
+          if (gh) gLabel = gh.innerText || gh.textContent || '';
+        }
+      }
+      handleRadioGroup(gLabel, pairs);
+    });
+
     try {
       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
         window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -647,23 +792,8 @@ export function buildAutofillScript(savedFields = []) {
     return runAutofill(customFields || savedFields);
   };
 
-  // Run automatically when DOM is ready
+  // Run only when explicitly injected on button press
   runAutofill(savedFields);
-
-  // Re-run on mutation if fields are rendered dynamically
-  if (!window.__JOBMAIL_AUTOFILL_OBSERVER__) {
-    var timer = null;
-    window.__JOBMAIL_AUTOFILL_OBSERVER__ = new MutationObserver(function() {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(function() {
-        runAutofill(savedFields);
-      }, 350);
-    });
-    window.__JOBMAIL_AUTOFILL_OBSERVER__.observe(document.body || document.documentElement, {
-      childList: true,
-      subtree: true
-    });
-  }
 })();
 true;
 `;

@@ -119,6 +119,8 @@ export default function FormAutofillScreen() {
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
   const [newFieldNumericValue, setNewFieldNumericValue] = useState('');
+  const [newFieldAltValues, setNewFieldAltValues] = useState([]);
+  const [altValueDraft, setAltValueDraft] = useState('');
 
   const loadFieldsFromStorage = useCallback(async () => {
     try {
@@ -220,6 +222,8 @@ export default function FormAutofillScreen() {
     setNewFieldName('');
     setNewFieldValue('');
     setNewFieldNumericValue('');
+    setNewFieldAltValues([]);
+    setAltValueDraft('');
     setModalVisible(true);
   }, []);
 
@@ -229,6 +233,8 @@ export default function FormAutofillScreen() {
     setNewFieldName(item.name || '');
     setNewFieldValue(item.value || '');
     setNewFieldNumericValue(item.numericValue || '');
+    setNewFieldAltValues(Array.isArray(item.altValues) ? item.altValues : []);
+    setAltValueDraft('');
     setModalVisible(true);
   }, []);
 
@@ -239,16 +245,31 @@ export default function FormAutofillScreen() {
     setNewFieldName('');
     setNewFieldValue('');
     setNewFieldNumericValue('');
+    setNewFieldAltValues([]);
+    setAltValueDraft('');
   }, []);
+
+  const handleAddAltValue = useCallback(() => {
+    const trimmed = altValueDraft.trim();
+    if (!trimmed) return;
+    setNewFieldAltValues((prev) =>
+      prev.some((v) => v.toLowerCase() === trimmed.toLowerCase()) ? prev : [...prev, trimmed]
+    );
+    setAltValueDraft('');
+  }, [altValueDraft]);
 
   // Handle Save (Add or Update)
   const handleSaveField = useCallback(async () => {
     const name = newFieldName.trim();
     const value = newFieldValue.trim();
     const numericValue = newFieldNumericValue.trim();
+    const pendingDraft = altValueDraft.trim();
+    const altValues = pendingDraft && !newFieldAltValues.includes(pendingDraft)
+      ? [...newFieldAltValues, pendingDraft]
+      : newFieldAltValues;
 
-    if (!name || (!value && !numericValue)) {
-      Alert.alert('Missing Info', 'Please enter field name and at least a text or numeric value.');
+    if (!name || (!value && !numericValue && altValues.length === 0)) {
+      Alert.alert('Missing Info', 'Please enter field name and at least one value.');
       return;
     }
 
@@ -256,7 +277,7 @@ export default function FormAutofillScreen() {
     if (editingItem) {
       updated = savedFields.map((f) =>
         f.id === editingItem.id
-          ? { ...f, name, value, numericValue, needsAnswer: false }
+          ? { ...f, name, value, numericValue, altValues, needsAnswer: false }
           : f
       );
     } else {
@@ -265,6 +286,7 @@ export default function FormAutofillScreen() {
         name,
         value,
         numericValue,
+        altValues,
         needsAnswer: false,
       };
       updated = [...savedFields, newItem];
@@ -278,6 +300,8 @@ export default function FormAutofillScreen() {
     newFieldName,
     newFieldValue,
     newFieldNumericValue,
+    newFieldAltValues,
+    altValueDraft,
     editingItem,
     savedFields,
     persistFields,
@@ -426,7 +450,6 @@ export default function FormAutofillScreen() {
               setSupportMultipleWindows={false}
               originWhitelist={['*']}
               injectedJavaScriptBeforeContentLoaded={IN_APP_LINK_SCRIPT}
-              injectedJavaScript={buildAutofillScript(savedFields)}
               onShouldStartLoadWithRequest={(req) => {
                 const { url } = req;
                 if (
@@ -454,10 +477,7 @@ export default function FormAutofillScreen() {
                 return false;
               }}
               onLoadStart={() => setFormLoading(true)}
-              onLoadEnd={() => {
-                setFormLoading(false);
-                triggerAutofill();
-              }}
+              onLoadEnd={() => setFormLoading(false)}
               onMessage={handleWebViewMessage}
             />
             {formLoading && (
@@ -553,7 +573,8 @@ export default function FormAutofillScreen() {
               renderItem={({ item }) => {
                 const hasText = item.value && item.value.toString().trim().length > 0;
                 const hasNum = item.numericValue && item.numericValue.toString().trim().length > 0;
-                const isPending = (!hasText && !hasNum) || item.needsAnswer;
+                const altList = Array.isArray(item.altValues) ? item.altValues.filter(Boolean) : [];
+                const isPending = (!hasText && !hasNum && altList.length === 0) || item.needsAnswer;
                 return (
                   <View
                     style={[
@@ -584,9 +605,16 @@ export default function FormAutofillScreen() {
                             : 'Tap pencil icon to add your answer for future forms'}
                         </Text>
                       ) : (
-                        <Text style={styles.savedItemValue} numberOfLines={3}>
-                          {item.value || item.numericValue}
-                        </Text>
+                        <>
+                          <Text style={styles.savedItemValue} numberOfLines={3}>
+                            {item.value || item.numericValue || altList[0]}
+                          </Text>
+                          {altList.length > 0 && (
+                            <Text style={styles.altValuesHint} numberOfLines={1}>
+                              Also: {altList.join(' • ')}
+                            </Text>
+                          )}
+                        </>
                       )}
                     </View>
 
@@ -775,6 +803,45 @@ export default function FormAutofillScreen() {
               onChangeText={setNewFieldNumericValue}
               keyboardType="numeric"
             />
+
+            <Text style={styles.modalFieldLabel}>
+              Additional Values (for Radio / Dropdown exact match)
+            </Text>
+            <View style={styles.altInputRow}>
+              <TextInput
+                style={[styles.popupInput, { flex: 1 }]}
+                placeholder="e.g. M (if primary is Male)"
+                placeholderTextColor="#94a3b8"
+                value={altValueDraft}
+                onChangeText={setAltValueDraft}
+                returnKeyType="done"
+                onSubmitEditing={handleAddAltValue}
+              />
+              <TouchableOpacity
+                style={styles.addAltBtn}
+                onPress={handleAddAltValue}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="add" size={16} color="#ffffff" />
+                <Text style={styles.addAltBtnText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+            {newFieldAltValues.length > 0 && (
+              <View style={styles.chipsRow}>
+                {newFieldAltValues.map((val, idx) => (
+                  <TouchableOpacity
+                    key={`${val}_${idx}`}
+                    style={styles.altValueChip}
+                    onPress={() =>
+                      setNewFieldAltValues((prev) => prev.filter((_, i) => i !== idx))
+                    }
+                  >
+                    <Text style={styles.altValueChipText}>{val}</Text>
+                    <Ionicons name="close-circle" size={13} color="#0a66c2" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
 
             <View style={styles.modalButtonsRow}>
               <TouchableOpacity
@@ -1212,5 +1279,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  altValuesHint: {
+    fontSize: 11,
+    color: '#0a66c2',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  altInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  addAltBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#0a66c2',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 8,
+  },
+  addAltBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  altValueChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 14,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  altValueChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0a66c2',
   },
 });

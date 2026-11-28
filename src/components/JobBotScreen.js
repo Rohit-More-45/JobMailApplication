@@ -31,11 +31,14 @@ import {
   loadAppliedJobs,
   loadQuarantineJobs,
   loadManualJobs,
+  loadDeletedJobs,
   loadBotLogs,
   addJobToAppliedList,
+  deleteJobPermanently,
   clearAppliedJobsList,
   clearQuarantineJobsList,
   clearManualJobsList,
+  clearDeletedJobsList,
   clearBotLogs,
   loadBotStatus,
   resolveExternalApplyUrl,
@@ -97,6 +100,7 @@ export default function JobBotScreen() {
   const [appliedJobs, setAppliedJobs] = useState([]);
   const [quarantineJobs, setQuarantineJobs] = useState([]);
   const [manualJobs, setManualJobs] = useState([]);
+  const [deletedJobs, setDeletedJobs] = useState([]);
   const [botLogs, setBotLogs] = useState([]);
   const [, setTickNow] = useState(0);
   const [status, setStatus] = useState({
@@ -109,14 +113,15 @@ export default function JobBotScreen() {
 
   // Job Lists popup modal state
   const [listsModalVisible, setListsModalVisible] = useState(false);
-  const [activeListTab, setActiveListTab] = useState('applied'); // 'applied' | 'quarantine' | 'manual' | 'logs'
+  const [activeListTab, setActiveListTab] = useState('applied'); // 'applied' | 'quarantine' | 'manual' | 'deleted' | 'logs'
 
   const refreshLiveLists = useCallback(async () => {
-    const [jobs, applied, quarantine, manual, logs, st] = await Promise.all([
+    const [jobs, applied, quarantine, manual, deleted, logs, st] = await Promise.all([
       loadFoundJobs(),
       loadAppliedJobs(),
       loadQuarantineJobs(),
       loadManualJobs(),
+      loadDeletedJobs(),
       loadBotLogs(),
       loadBotStatus(),
     ]);
@@ -124,6 +129,7 @@ export default function JobBotScreen() {
     setAppliedJobs(applied);
     setQuarantineJobs(quarantine);
     setManualJobs(manual);
+    setDeletedJobs(deleted);
     setBotLogs(logs);
     setStatus(st);
   }, []);
@@ -185,7 +191,12 @@ export default function JobBotScreen() {
   );
 
   const handleSaveCondition = useCallback(async () => {
-    if (!config.keywords.trim() && !config.keywords2?.trim() && !config.customUrl.trim()) {
+    if (
+      !config.keywords.trim() &&
+      !config.keywords2?.trim() &&
+      !config.keywords3?.trim() &&
+      !config.customUrl.trim()
+    ) {
       Alert.alert('Missing Search Condition', 'Enter at least one job title or a LinkedIn search URL.');
       return;
     }
@@ -211,7 +222,12 @@ export default function JobBotScreen() {
   }, [config, triggerBotSearch]);
 
   const handleCheckNow = useCallback(async () => {
-    if (!config.keywords.trim() && !config.keywords2?.trim() && !config.customUrl.trim()) {
+    if (
+      !config.keywords.trim() &&
+      !config.keywords2?.trim() &&
+      !config.keywords3?.trim() &&
+      !config.customUrl.trim()
+    ) {
       Alert.alert('Missing Search Condition', 'Enter at least one job title or a LinkedIn search URL.');
       return;
     }
@@ -258,11 +274,21 @@ export default function JobBotScreen() {
     [refreshLiveLists]
   );
 
+  const handleDeleteJob = useCallback(
+    async (job) => {
+      await deleteJobPermanently(job);
+      await refreshLiveLists();
+    },
+    [refreshLiveLists]
+  );
+
   const handleClearActiveModalList = useCallback(async () => {
     if (activeListTab === 'applied') {
       await clearAppliedJobsList();
     } else if (activeListTab === 'quarantine') {
       await clearQuarantineJobsList();
+    } else if (activeListTab === 'deleted') {
+      await clearDeletedJobsList();
     } else if (activeListTab === 'logs') {
       await clearBotLogs();
     } else {
@@ -320,6 +346,8 @@ export default function JobBotScreen() {
       ? appliedJobs
       : activeListTab === 'quarantine'
       ? quarantineJobs
+      : activeListTab === 'deleted'
+      ? deletedJobs
       : activeListTab === 'logs'
       ? botLogs
       : manualJobs;
@@ -419,6 +447,14 @@ export default function JobBotScreen() {
               onChangeText={(text) => setConfig((prev) => ({ ...prev, keywords2: text }))}
             />
           </View>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Job Title 3 (Optional, e.g. Full Stack Developer)"
+            placeholderTextColor="#94a3b8"
+            value={config.keywords3 || ''}
+            onChangeText={(text) => setConfig((prev) => ({ ...prev, keywords3: text }))}
+          />
 
           <TextInput
             style={styles.input}
@@ -780,7 +816,17 @@ export default function JobBotScreen() {
               </Text>
               <View style={styles.jobMetaRow}>
                 <Text style={styles.jobTime}>{item.timeText}</Text>
-                <Text style={styles.openLinkText}>Open in LinkedIn →</Text>
+                <View style={styles.foundJobRightActions}>
+                  <Text style={styles.openLinkText}>Open in LinkedIn →</Text>
+                  <TouchableOpacity
+                    style={styles.deleteCardIconBtn}
+                    onPress={() => handleDeleteJob(item)}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    accessibilityLabel={`Delete ${item.title}`}
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#ef4444" />
+                  </TouchableOpacity>
+                </View>
               </View>
             </TouchableOpacity>
           ))
@@ -825,8 +871,13 @@ export default function JobBotScreen() {
               </View>
             </View>
 
-            {/* Segmented Tabs: Applied, Quarantine, Manual, Logs */}
-            <View style={styles.segmentContainer}>
+            {/* Segmented Tabs: Applied, Quarantine, Manual, Deleted, Logs */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.segmentScroll}
+              contentContainerStyle={styles.segmentContainer}
+            >
               <TouchableOpacity
                 style={[
                   styles.segmentBtn,
@@ -884,6 +935,24 @@ export default function JobBotScreen() {
               <TouchableOpacity
                 style={[
                   styles.segmentBtn,
+                  activeListTab === 'deleted' && styles.segmentBtnDeletedActive,
+                ]}
+                onPress={() => setActiveListTab('deleted')}
+              >
+                <Text
+                  style={[
+                    styles.segmentText,
+                    activeListTab === 'deleted' && styles.segmentTextActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  Deleted ({deletedJobs.length})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.segmentBtn,
                   activeListTab === 'logs' && styles.segmentBtnLogsActive,
                 ]}
                 onPress={() => setActiveListTab('logs')}
@@ -898,7 +967,7 @@ export default function JobBotScreen() {
                   Logs ({botLogs.length})
                 </Text>
               </TouchableOpacity>
-            </View>
+            </ScrollView>
 
             {/* List Body */}
             {modalData.length === 0 ? (
@@ -909,6 +978,8 @@ export default function JobBotScreen() {
                       ? 'checkmark-done-outline'
                       : activeListTab === 'quarantine'
                       ? 'shield-outline'
+                      : activeListTab === 'deleted'
+                      ? 'trash-outline'
                       : activeListTab === 'logs'
                       ? 'terminal-outline'
                       : 'briefcase-outline'
@@ -921,6 +992,8 @@ export default function JobBotScreen() {
                     ? 'No Bot-Applied Jobs Yet'
                     : activeListTab === 'quarantine'
                     ? 'No Quarantined Jobs'
+                    : activeListTab === 'deleted'
+                    ? 'No Deleted Jobs'
                     : activeListTab === 'logs'
                     ? 'No Activity Logs Yet'
                     : 'No Manual Jobs Pending'}
@@ -930,6 +1003,8 @@ export default function JobBotScreen() {
                     ? 'Make sure you are signed in to the LinkedIn tab so the bot can submit Easy Apply jobs automatically.'
                     : activeListTab === 'quarantine'
                     ? 'Easy Apply jobs with unknown questions are quarantined here, and the new questions are saved to your Autofill tab.'
+                    : activeListTab === 'deleted'
+                    ? 'Jobs you delete are saved here and will never appear again in future scans.'
                     : activeListTab === 'logs'
                     ? 'Every 5-minute refresh, Easy Apply question & answer, and Quarantine event will be logged here.'
                     : 'Non-Easy Apply jobs found by the bot will appear here for you to apply manually.'}
@@ -972,6 +1047,8 @@ export default function JobBotScreen() {
                             ? styles.statusAppliedBadge
                             : activeListTab === 'quarantine'
                             ? styles.statusQuarantineBadge
+                            : activeListTab === 'deleted'
+                            ? styles.statusDeletedBadge
                             : styles.statusManualBadge
                         }
                       >
@@ -981,6 +1058,8 @@ export default function JobBotScreen() {
                               ? styles.statusAppliedText
                               : activeListTab === 'quarantine'
                               ? styles.statusQuarantineText
+                              : activeListTab === 'deleted'
+                              ? styles.statusDeletedText
                               : styles.statusManualText
                           }
                         >
@@ -988,6 +1067,8 @@ export default function JobBotScreen() {
                             ? 'Applied'
                             : activeListTab === 'quarantine'
                             ? 'Quarantine'
+                            : activeListTab === 'deleted'
+                            ? 'Deleted'
                             : 'Manual'}
                         </Text>
                       </View>
@@ -1035,33 +1116,35 @@ export default function JobBotScreen() {
                       )}
 
                     <View style={styles.modalJobActions}>
-                      <TouchableOpacity
-                        style={styles.modalOpenBtn}
-                        onPress={async () => {
-                          setListsModalVisible(false);
-                          if (activeListTab === 'manual') {
-                            const resolvedUrl =
-                              item.applyUrl || (await resolveExternalApplyUrl(item.id, item.url));
-                            const isLinkedIn =
-                              resolvedUrl &&
-                              (resolvedUrl.includes('linkedin.com/jobs/') ||
-                                resolvedUrl.includes('linkedin.com/comm/'));
-                            if (isLinkedIn || !resolvedUrl) {
-                              // Open in LinkedIn tab so the user sees the Apply button
-                              navigateToJobUrl(item.url);
+                      {activeListTab !== 'deleted' && (
+                        <TouchableOpacity
+                          style={styles.modalOpenBtn}
+                          onPress={async () => {
+                            setListsModalVisible(false);
+                            if (activeListTab === 'manual') {
+                              const resolvedUrl =
+                                item.applyUrl || (await resolveExternalApplyUrl(item.id, item.url));
+                              const isLinkedIn =
+                                resolvedUrl &&
+                                (resolvedUrl.includes('linkedin.com/jobs/') ||
+                                  resolvedUrl.includes('linkedin.com/comm/'));
+                              if (isLinkedIn || !resolvedUrl) {
+                                // Open in LinkedIn tab so the user sees the Apply button
+                                navigateToJobUrl(item.url);
+                              } else {
+                                // External apply link: open in Autofill tab
+                                navigateToAutofillUrl(resolvedUrl);
+                              }
                             } else {
-                              // External apply link: open in Autofill tab
-                              navigateToAutofillUrl(resolvedUrl);
+                              navigateToJobUrl(item.url);
                             }
-                          } else {
-                            navigateToJobUrl(item.url);
-                          }
-                        }}
-                      >
-                        <Text style={styles.modalOpenBtnText}>
-                          {activeListTab === 'applied' ? 'View Job' : 'Apply Manually →'}
-                        </Text>
-                      </TouchableOpacity>
+                          }}
+                        >
+                          <Text style={styles.modalOpenBtnText}>
+                            {activeListTab === 'applied' ? 'View Job' : 'Apply Manually →'}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
 
                       {activeListTab === 'quarantine' && (
                         <TouchableOpacity
@@ -1080,6 +1163,16 @@ export default function JobBotScreen() {
                         >
                           <Ionicons name="checkmark" size={14} color="#10a37f" />
                           <Text style={styles.markAppliedBtnText}>Mark Applied</Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {activeListTab !== 'deleted' && (
+                        <TouchableOpacity
+                          style={styles.modalDeleteBtn}
+                          onPress={() => handleDeleteJob(item)}
+                          accessibilityLabel={`Delete ${item.title}`}
+                        >
+                          <Ionicons name="trash-outline" size={14} color="#ef4444" />
                         </TouchableOpacity>
                       )}
                     </View>
@@ -1597,19 +1690,22 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#ef4444',
   },
+  segmentScroll: {
+    flexGrow: 0,
+    marginVertical: 10,
+  },
   segmentContainer: {
     flexDirection: 'row',
-    gap: 8,
-    marginVertical: 10,
+    gap: 6,
     backgroundColor: '#f1f5f9',
     padding: 4,
     borderRadius: 10,
   },
   segmentBtn: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 11,
     paddingVertical: 8,
     borderRadius: 8,
     gap: 5,
@@ -1623,8 +1719,41 @@ const styles = StyleSheet.create({
   segmentBtnManualActive: {
     backgroundColor: '#d97706',
   },
+  segmentBtnDeletedActive: {
+    backgroundColor: '#ef4444',
+  },
   segmentBtnLogsActive: {
     backgroundColor: '#0f172a',
+  },
+  foundJobRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  deleteCardIconBtn: {
+    padding: 4,
+    borderRadius: 6,
+    backgroundColor: '#fef2f2',
+  },
+  statusDeletedBadge: {
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  statusDeletedText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#991b1b',
+  },
+  modalDeleteBtn: {
+    marginLeft: 'auto',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
   },
   segmentText: {
     fontSize: 12,

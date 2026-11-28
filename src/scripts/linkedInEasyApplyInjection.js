@@ -18,7 +18,8 @@ export function buildEasyApplyScript(savedFields = []) {
       f &&
       f.name &&
       ((f.value && f.value.toString().trim().length > 0) ||
-        (f.numericValue && f.numericValue.toString().trim().length > 0))
+        (f.numericValue && f.numericValue.toString().trim().length > 0) ||
+        (Array.isArray(f.altValues) && f.altValues.some((v) => v && v.toString().trim().length > 0)))
   );
   const fieldsJson = JSON.stringify(answeredFields);
 
@@ -120,7 +121,35 @@ export function buildEasyApplyScript(savedFields = []) {
     if (field.numericValue && field.numericValue.toString().trim().length > 0) {
       return field.numericValue.toString().trim();
     }
+    if (Array.isArray(field.altValues)) {
+      for (var i = 0; i < field.altValues.length; i++) {
+        if (field.altValues[i] && field.altValues[i].toString().trim().length > 0) {
+          return field.altValues[i].toString().trim();
+        }
+      }
+    }
     return null;
+  }
+
+  function getAllFieldValues(field, preferNumeric) {
+    var list = [];
+    var seen = {};
+    function pushVal(v) {
+      if (v === undefined || v === null) return;
+      var s = v.toString().trim();
+      if (!s || seen[s]) return;
+      seen[s] = true;
+      list.push(s);
+    }
+    pushVal(pickFieldValue(field, preferNumeric));
+    if (Array.isArray(field.altValues)) {
+      for (var i = 0; i < field.altValues.length; i++) {
+        pushVal(field.altValues[i]);
+      }
+    }
+    pushVal(field.value);
+    pushVal(field.numericValue);
+    return list;
   }
 
   function normalize(str) {
@@ -155,7 +184,7 @@ export function buildEasyApplyScript(savedFields = []) {
     return null;
   }
 
-  // Match a question label against user's saved Q&A + Ready Answers
+  // Match a question label against user's saved Q&A + Ready Answers (strict exact matching)
   function findAnswerForQuestion(questionLabel, preferNumeric) {
     if (!questionLabel) return null;
     var normQ = normalize(questionLabel);
@@ -163,13 +192,20 @@ export function buildEasyApplyScript(savedFields = []) {
 
     var qNameCat = getNameCategory(questionLabel);
 
+    function wrapField(f, overridePrimary) {
+      var primary = overridePrimary || pickFieldValue(f, preferNumeric);
+      if (!primary) return null;
+      var all = overridePrimary ? [overridePrimary] : getAllFieldValues(f, preferNumeric);
+      return { primary: primary, allValues: all };
+    }
+
     // 1. Exact normalized match against saved questions (with strict Name isolation)
     for (var i = 0; i < savedFields.length; i++) {
       var f = savedFields[i];
       var fNameCat = getNameCategory(f.name);
       if (qNameCat && fNameCat && qNameCat !== fNameCat) continue;
       if (normalize(f.name) === normQ) {
-        return pickFieldValue(f, preferNumeric);
+        return wrapField(f, null);
       }
     }
 
@@ -177,45 +213,46 @@ export function buildEasyApplyScript(savedFields = []) {
     if (qNameCat) {
       for (var ni = 0; ni < savedFields.length; ni++) {
         if (getNameCategory(savedFields[ni].name) === qNameCat) {
-          return pickFieldValue(savedFields[ni], preferNumeric);
+          return wrapField(savedFields[ni], null);
         }
       }
       return null;
     }
 
-    // 2. High token-overlap match for saved custom questions (>= 75% of saved question words match)
+    // 2. Exact 100% token match for saved custom questions (only when confident)
     var qTokens = getTokens(questionLabel);
     for (var j = 0; j < savedFields.length; j++) {
       var sf = savedFields[j];
       var sfTokens = getTokens(sf.name);
-      if (sfTokens.length >= 3) {
+      if (sfTokens.length >= 2 && qTokens.length <= sfTokens.length + 2) {
         var hits = 0;
         for (var k = 0; k < sfTokens.length; k++) {
           if (qTokens.indexOf(sfTokens[k]) !== -1) hits++;
         }
-        if (hits / sfTokens.length >= 0.75) {
-          return pickFieldValue(sf, preferNumeric);
+        if (hits === sfTokens.length) {
+          return wrapField(sf, null);
         }
       }
     }
 
-    // 3. Semantic matching against standard Ready Answers
+    // 3. Strict semantic matching against standard Ready Answers
     var lower = questionLabel.toLowerCase();
     var semanticRules = [
-      { test: ['phone', 'mobile', 'contact number'], keys: ['phone', 'mobile'], transform: function(v) { return v.replace(/[^0-9+]/g, ''); } },
+      { test: ['phone', 'mobile number', 'contact number'], keys: ['phone', 'mobile'], transform: function(v) { return v.replace(/[^0-9+]/g, ''); } },
       { test: ['email', 'e-mail'], keys: ['email'] },
-      { test: ['city', 'location', 'reside', 'address'], keys: ['location', 'city'] },
+      { test: ['city', 'current location', 'location', 'reside'], keys: ['location', 'city'] },
       { test: ['notice period', 'how soon', 'days notice'], keys: ['notice'], transform: function(v) { var m = v.match(/\\d+/); return m ? m[0] : v; } },
-      { test: ['expected salary', 'expected ctc', 'current ctc', 'compensation', 'desired salary'], keys: ['salary', 'ctc'] },
+      { test: ['expected salary', 'expected ctc', 'desired salary'], keys: ['expected salary', 'expected ctc'] },
+      { test: ['current salary', 'current ctc'], keys: ['current salary', 'current ctc'] },
       { test: ['authorized to work', 'work authorization', 'legally authorized'], keys: ['authorization', 'work authorization'] },
-      { test: ['relocate', 'relocation'], keys: ['relocate', 'relocation'] },
+      { test: ['willing to relocate', 'relocate', 'relocation'], keys: ['relocate', 'relocation'] },
       { test: ['cgpa', 'gpa'], keys: ['cgpa', 'gpa'] },
-      { test: ['university', 'college', 'school', 'institute'], keys: ['college', 'university'] },
-      { test: ['degree', 'education', 'qualification'], keys: ['education', 'degree'] },
-      { test: ['current company', 'employer'], keys: ['company'] },
-      { test: ['job title', 'designation', 'current role'], keys: ['job title', 'title'] },
+      { test: ['university', 'college', 'institute'], keys: ['college', 'university'] },
+      { test: ['highest education', 'highest degree', 'degree'], keys: ['education', 'degree'] },
+      { test: ['current company', 'current employer'], keys: ['current company', 'company'] },
+      { test: ['current job title', 'job title', 'designation'], keys: ['job title', 'title'] },
       { test: ['linkedin'], keys: ['linkedin'] },
-      { test: ['summary', 'cover letter', 'about yourself'], keys: ['summary'] }
+      { test: ['professional summary', 'cover letter'], keys: ['summary'] }
     ];
 
     for (var r = 0; r < semanticRules.length; r++) {
@@ -234,7 +271,8 @@ export function buildEasyApplyScript(savedFields = []) {
             if (fieldLower.indexOf(rule.keys[fk]) !== -1) {
               var val = pickFieldValue(savedFields[s], preferNumeric);
               if (!val) continue;
-              return (!preferNumeric && rule.transform) ? rule.transform(val) : val;
+              var transformed = (!preferNumeric && rule.transform) ? rule.transform(val) : val;
+              return wrapField(savedFields[s], transformed !== val ? transformed : null);
             }
           }
         }
@@ -316,10 +354,10 @@ export function buildEasyApplyScript(savedFields = []) {
       }
 
       var isNum = expectsNumericInput(el, qLabel);
-      var answer = findAnswerForQuestion(qLabel, isNum);
-      if (answer) {
-        setNativeValue(el, answer);
-        recordQaLog(qLabel, answer, isNum ? 'Autofill Numeric' : 'Autofill');
+      var answerObj = findAnswerForQuestion(qLabel, isNum);
+      if (answerObj && answerObj.primary) {
+        setNativeValue(el, answerObj.primary);
+        recordQaLog(qLabel, answerObj.primary, isNum ? 'Autofill Numeric' : 'Autofill');
       } else if (qLabel) {
         recordUnknown(qLabel, 'text', []);
       }
@@ -352,18 +390,27 @@ export function buildEasyApplyScript(savedFields = []) {
         }
       }
 
-      var answer = findAnswerForQuestion(qLabel);
+      var answerObj = findAnswerForQuestion(qLabel, false);
       var matchedOptionText = null;
-      if (answer) {
-        var normAns = normalize(answer);
-        for (var idx = 0; idx < sel.options.length; idx++) {
-          var opt = sel.options[idx];
-          var optNorm = normalize(opt.text);
-          if (optNorm && (optNorm === normAns || optNorm.indexOf(normAns) !== -1 || normAns.indexOf(optNorm) !== -1)) {
-            sel.selectedIndex = idx;
-            sel.dispatchEvent(new Event('change', { bubbles: true }));
-            matchedOptionText = (opt.text || '').trim();
-            break;
+      if (answerObj && answerObj.allValues) {
+        for (var av = 0; av < answerObj.allValues.length && !matchedOptionText; av++) {
+          var normAns = normalize(answerObj.allValues[av]);
+          var lowAns = answerObj.allValues[av].toLowerCase().trim();
+          if (!normAns) continue;
+          for (var idx = 0; idx < sel.options.length; idx++) {
+            var opt = sel.options[idx];
+            var optNorm = normalize(opt.text);
+            var optValNorm = normalize(opt.value);
+            var isExact = optNorm === normAns || optValNorm === normAns;
+            var isYesNoExact =
+              (optNorm === 'yes' && /^yes\\b/.test(lowAns)) ||
+              (optNorm === 'no' && /^no\\b/.test(lowAns));
+            if (optNorm && (isExact || isYesNoExact)) {
+              sel.selectedIndex = idx;
+              sel.dispatchEvent(new Event('change', { bubbles: true }));
+              matchedOptionText = (opt.text || '').trim();
+              break;
+            }
           }
         }
       }
@@ -412,22 +459,29 @@ export function buildEasyApplyScript(savedFields = []) {
         return;
       }
 
-      var answer = findAnswerForQuestion(qLabel);
+      var answerObj = findAnswerForQuestion(qLabel, false);
       var matchedRadioLabel = null;
-      if (answer) {
-        var ansLower = answer.toLowerCase();
-        for (var p = 0; p < radioPairs.length; p++) {
-          var lblLow = radioPairs[p].label.toLowerCase();
-          if (
-            lblLow === ansLower ||
-            (ansLower.indexOf('yes') === 0 && lblLow === 'yes') ||
-            (ansLower.indexOf('no') === 0 && lblLow === 'no') ||
-            ansLower.indexOf(lblLow) !== -1
-          ) {
-            radioPairs[p].radio.click();
-            radioPairs[p].radio.dispatchEvent(new Event('change', { bubbles: true }));
-            matchedRadioLabel = radioPairs[p].label;
-            break;
+      if (answerObj && answerObj.allValues) {
+        for (var av = 0; av < answerObj.allValues.length && !matchedRadioLabel; av++) {
+          var ansLower = answerObj.allValues[av].toLowerCase().trim();
+          var ansNorm = normalize(answerObj.allValues[av]);
+          if (!ansNorm) continue;
+          for (var p = 0; p < radioPairs.length; p++) {
+            var lblLow = radioPairs[p].label.toLowerCase().trim();
+            var lblNorm = normalize(radioPairs[p].label);
+            var radValNorm = normalize(radioPairs[p].radio.value || '');
+            var isExact =
+              lblLow === ansLower ||
+              lblNorm === ansNorm ||
+              (radValNorm && radValNorm === ansNorm) ||
+              (lblLow === 'yes' && /^yes\\b/.test(ansLower)) ||
+              (lblLow === 'no' && /^no\\b/.test(ansLower));
+            if (isExact) {
+              radioPairs[p].radio.click();
+              radioPairs[p].radio.dispatchEvent(new Event('change', { bubbles: true }));
+              matchedRadioLabel = radioPairs[p].label;
+              break;
+            }
           }
         }
       }

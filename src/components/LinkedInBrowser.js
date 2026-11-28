@@ -356,10 +356,9 @@ export default function LinkedInBrowser() {
           </ViewShot>
         )}
 
-        {/* Compact Floating Screenshot Icons: Camera, Counter & Trash */}
+        {/* Compressed Floating Screenshot Dock: Camera with Overlapped Count & Trash */}
         {!isCapturing && (
           <View style={styles.compactScreenshotDock}>
-            {/* Take Screenshot: Small Camera Icon Only */}
             <TouchableOpacity
               style={[
                 styles.iconBtn,
@@ -371,31 +370,21 @@ export default function LinkedInBrowser() {
               accessibilityLabel="Take Screenshot"
             >
               <Ionicons name="camera" size={18} color="#ffffff" />
+              <View style={styles.overlapCounterBadge}>
+                <Text style={styles.overlapCounterText}>{screenshots.length}/3</Text>
+              </View>
             </TouchableOpacity>
 
-            {/* Small Screenshot Counter (e.g. 0/3, 1/3, 2/3, 3/3) */}
-            <View style={styles.counterBadge}>
-              <Text style={styles.counterText}>{screenshots.length}/3</Text>
-            </View>
-
-            {/* Clear Screenshots: Small Trash Icon Only */}
-            <TouchableOpacity
-              style={[
-                styles.iconBtn,
-                styles.trashBtn,
-                screenshots.length === 0 && styles.trashBtnDisabled,
-              ]}
-              onPress={handleClearScreenshots}
-              activeOpacity={0.8}
-              disabled={screenshots.length === 0}
-              accessibilityLabel="Clear Screenshots"
-            >
-              <Ionicons
-                name="trash-outline"
-                size={18}
-                color={screenshots.length === 0 ? '#94a3b8' : '#ef4444'}
-              />
-            </TouchableOpacity>
+            {screenshots.length > 0 && (
+              <TouchableOpacity
+                style={[styles.iconBtn, styles.trashBtn]}
+                onPress={handleClearScreenshots}
+                activeOpacity={0.8}
+                accessibilityLabel="Clear Screenshots"
+              >
+                <Ionicons name="trash-outline" size={16} color="#ef4444" />
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </View>
@@ -461,16 +450,15 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 14,
     right: 14,
-    backgroundColor: '#ffffff',
+    backgroundColor: 'rgba(255,255,255,0.95)',
     borderRadius: 22,
-    paddingHorizontal: 6,
-    paddingVertical: 5,
+    padding: 4,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 5,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.16,
     shadowRadius: 6,
     elevation: 5,
     borderWidth: 1,
@@ -485,32 +473,33 @@ const styles = StyleSheet.create({
   },
   cameraBtn: {
     backgroundColor: '#0a66c2',
+    position: 'relative',
   },
   btnDisabled: {
     backgroundColor: '#94a3b8',
   },
+  overlapCounterBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -5,
+    backgroundColor: '#0f172a',
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+  },
+  overlapCounterText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
   trashBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#fef2f2',
     borderWidth: 1,
     borderColor: '#fee2e2',
-  },
-  trashBtnDisabled: {
-    backgroundColor: '#f8fafc',
-    borderColor: '#e2e8f0',
-  },
-  counterBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-    borderRadius: 10,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  counterText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
   },
 });

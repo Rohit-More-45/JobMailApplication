@@ -13,6 +13,7 @@ const FOUND_JOBS_KEY = '@JobMail:job_bot_found_jobs';
 const APPLIED_JOBS_KEY = '@JobMail:job_bot_applied_jobs';
 const QUARANTINE_JOBS_KEY = '@JobMail:job_bot_quarantine_jobs';
 const MANUAL_JOBS_KEY = '@JobMail:job_bot_manual_jobs';
+const DELETED_JOBS_KEY = '@JobMail:job_bot_deleted_jobs';
 const SAVED_FIELDS_KEY = '@JobMail:saved_form_fields';
 const BOT_LOGS_KEY = '@JobMail:job_bot_activity_logs';
 const STATUS_KEY = '@JobMail:job_bot_status';
@@ -43,6 +44,7 @@ export const DEFAULT_BOT_CONFIG = {
   easyApplyOnly: true, // Uses LinkedIn f_AL=true filter
   keywords: 'Software Engineer',
   keywords2: '.NET Developer',
+  keywords3: '',
   descriptionKeywords: '', // Optional Boolean group condition, e.g. (.net OR dotnet) AND angular
   maxExperienceYears: 3, // Verify job description allows <= 3 years experience (0/null = Any)
   location: 'India',
@@ -161,13 +163,53 @@ export async function loadQuarantineJobs() {
   return [];
 }
 
+export async function loadDeletedJobs() {
+  try {
+    const raw = await AsyncStorage.getItem(DELETED_JOBS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (_e) {}
+  return [];
+}
+
+export async function deleteJobPermanently(job) {
+  if (!job || !job.id) return;
+  const [deleted, found, applied, quarantine, manual] = await Promise.all([
+    loadDeletedJobs(),
+    loadFoundJobs(),
+    loadAppliedJobs(),
+    loadQuarantineJobs(),
+    loadManualJobs(),
+  ]);
+  const entry = {
+    ...job,
+    deletedAt: Date.now(),
+  };
+  const updatedDeleted = [entry, ...deleted.filter((j) => j.id !== job.id)].slice(0, 500);
+  await Promise.all([
+    AsyncStorage.setItem(DELETED_JOBS_KEY, JSON.stringify(updatedDeleted)),
+    AsyncStorage.setItem(FOUND_JOBS_KEY, JSON.stringify(found.filter((j) => j.id !== job.id))),
+    AsyncStorage.setItem(APPLIED_JOBS_KEY, JSON.stringify(applied.filter((j) => j.id !== job.id))),
+    AsyncStorage.setItem(QUARANTINE_JOBS_KEY, JSON.stringify(quarantine.filter((j) => j.id !== job.id))),
+    AsyncStorage.setItem(MANUAL_JOBS_KEY, JSON.stringify(manual.filter((j) => j.id !== job.id))),
+  ]);
+}
+
+export async function clearDeletedJobsList() {
+  await AsyncStorage.setItem(DELETED_JOBS_KEY, JSON.stringify([]));
+}
+
 export async function addJobToAppliedList(job, note = 'Easy Apply submitted by Bot', qaLog = []) {
   if (!job || !job.id) return;
-  const [applied, manual, quarantine] = await Promise.all([
+  const [applied, manual, quarantine, deleted] = await Promise.all([
     loadAppliedJobs(),
     loadManualJobs(),
     loadQuarantineJobs(),
+    loadDeletedJobs(),
   ]);
+  if (deleted.some((j) => j.id === job.id)) return;
   const entry = {
     ...job,
     appliedAt: Date.now(),
@@ -191,12 +233,13 @@ export async function addJobToQuarantineList(
   qaLog = []
 ) {
   if (!job || !job.id) return;
-  const [applied, quarantine, manual] = await Promise.all([
+  const [applied, quarantine, manual, deleted] = await Promise.all([
     loadAppliedJobs(),
     loadQuarantineJobs(),
     loadManualJobs(),
+    loadDeletedJobs(),
   ]);
-  if (applied.some((j) => j.id === job.id)) return;
+  if (applied.some((j) => j.id === job.id) || deleted.some((j) => j.id === job.id)) return;
   const entry = {
     ...job,
     quarantinedAt: Date.now(),
@@ -214,12 +257,19 @@ export async function addJobToQuarantineList(
 
 export async function addJobToManualList(job, note = 'External Apply (Manual)', applyUrl = null) {
   if (!job || !job.id) return;
-  const [applied, quarantine, manual] = await Promise.all([
+  const [applied, quarantine, manual, deleted] = await Promise.all([
     loadAppliedJobs(),
     loadQuarantineJobs(),
     loadManualJobs(),
+    loadDeletedJobs(),
   ]);
-  if (applied.some((j) => j.id === job.id) || quarantine.some((j) => j.id === job.id)) return;
+  if (
+    applied.some((j) => j.id === job.id) ||
+    quarantine.some((j) => j.id === job.id) ||
+    deleted.some((j) => j.id === job.id)
+  ) {
+    return;
+  }
   const entry = {
     ...job,
     applyUrl: applyUrl || job.applyUrl || null,
@@ -422,15 +472,15 @@ export function buildAllLinkedInSearchUrls(config) {
     urls.push(buildLinkedInBrowserSearchUrl(config));
     return urls;
   }
-  if (config.keywords && config.keywords.trim()) {
-    urls.push(buildLinkedInBrowserSearchUrl(config, config.keywords.trim()));
-  }
-  if (
-    config.keywords2 &&
-    config.keywords2.trim() &&
-    config.keywords2.trim().toLowerCase() !== (config.keywords || '').trim().toLowerCase()
-  ) {
-    urls.push(buildLinkedInBrowserSearchUrl(config, config.keywords2.trim()));
+  const seenKw = new Set();
+  const candidates = [config.keywords, config.keywords2, config.keywords3];
+  for (const rawKw of candidates) {
+    const trimmed = (rawKw || '').trim();
+    if (!trimmed) continue;
+    const low = trimmed.toLowerCase();
+    if (seenKw.has(low)) continue;
+    seenKw.add(low);
+    urls.push(buildLinkedInBrowserSearchUrl(config, trimmed));
   }
   return urls;
 }
@@ -588,6 +638,12 @@ async function sendNewJobsNotification(newJobs) {
  */
 export async function processFetchedJobs(fetchedJobs, { notify = true } = {}) {
   const prevStatus = await loadBotStatus();
+  const deletedJobs = await loadDeletedJobs();
+  const deletedSet = new Set(deletedJobs.map((j) => j.id));
+  const filteredJobs = (Array.isArray(fetchedJobs) ? fetchedJobs : []).filter(
+    (j) => j && j.id && !deletedSet.has(j.id)
+  );
+
   let seenIds = [];
   try {
     const seenRaw = await AsyncStorage.getItem(SEEN_IDS_KEY);
@@ -604,10 +660,10 @@ export async function processFetchedJobs(fetchedJobs, { notify = true } = {}) {
   let easyApplyQueueCandidates = [];
 
   if (isBaseline) {
-    const baselineIds = fetchedJobs.map((j) => j.id);
+    const baselineIds = filteredJobs.map((j) => j.id);
     await AsyncStorage.setItem(SEEN_IDS_KEY, JSON.stringify(baselineIds.slice(0, 300)));
 
-    const initialDisplay = fetchedJobs.slice(0, 25).map((j) => ({
+    const initialDisplay = filteredJobs.slice(0, 25).map((j) => ({
       ...j,
       foundAt: now,
       isNew: false,
@@ -622,7 +678,7 @@ export async function processFetchedJobs(fetchedJobs, { notify = true } = {}) {
       }
     }
   } else {
-    newJobs = fetchedJobs
+    newJobs = filteredJobs
       .filter((j) => !seenSet.has(j.id))
       .map((j) => ({
         ...j,
@@ -637,7 +693,7 @@ export async function processFetchedJobs(fetchedJobs, { notify = true } = {}) {
       const existingFound = await loadFoundJobs();
       const combinedFound = [
         ...newJobs,
-        ...existingFound.map((j) => ({ ...j, isNew: false })),
+        ...existingFound.filter((j) => !deletedSet.has(j.id)).map((j) => ({ ...j, isNew: false })),
       ].slice(0, 50);
       await AsyncStorage.setItem(FOUND_JOBS_KEY, JSON.stringify(combinedFound));
 
@@ -666,7 +722,7 @@ export async function processFetchedJobs(fetchedJobs, { notify = true } = {}) {
   return {
     newJobs,
     easyApplyJobs: easyApplyQueueCandidates,
-    totalFetched: fetchedJobs.length,
+    totalFetched: filteredJobs.length,
     isBaseline,
     status: nextStatus,
   };
